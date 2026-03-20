@@ -48,9 +48,11 @@ Available tools you can call (respond with tool_calls JSON):
 9. get_dashboard() — Get system dashboard stats
 10. search_knowledge(domain?, tags?) — Search knowledge base
 11. set_user_role(channel, channel_user_id, role, display_name?) — Set user role (admin only)
-    role: "admin"|"manager"|"staff"|"user"
 12. list_users() — List all tenant users with roles
-13. respond(message) — Send a text response to the user (ALWAYS call this)
+13. list_files(limit?) — List uploaded files
+14. get_file(file_id) — Get file details + S3 URL
+15. send_file(file_id) — Send a file back to user in chat (image/doc/video)
+16. respond(message) — Send a text response to the user (ALWAYS call this)
 `;
 
 interface ToolCall {
@@ -227,6 +229,23 @@ function executeTool(tool: string, args: Record<string, unknown>, tenantId: stri
         .all();
     }
 
+    case "send_file": {
+      const { getFile: gf } = require("../modules/storage/s3.service.js");
+      const file = gf(args.file_id as string);
+      if (!file) return { error: "File not found" };
+      return { __send_file__: true, url: file.s3Url, fileName: file.fileName, mimeType: file.mimeType };
+    }
+
+    case "list_files": {
+      const { listFiles } = require("../modules/storage/s3.service.js");
+      return listFiles(tenantId, (args.limit as number) ?? 20);
+    }
+
+    case "get_file": {
+      const { getFile } = require("../modules/storage/s3.service.js");
+      return getFile(args.file_id as string);
+    }
+
     case "respond": {
       return { message: args.message };
     }
@@ -238,6 +257,11 @@ function executeTool(tool: string, args: Record<string, unknown>, tenantId: stri
 
 // ── Commander LLM call ───────────────────────────────────────
 
+export interface CommanderResponse {
+  text: string;
+  files: { url: string; fileName: string; mimeType: string }[];
+}
+
 export async function processWithCommander(input: {
   userMessage: string;
   userName: string;
@@ -247,14 +271,15 @@ export async function processWithCommander(input: {
   tenantName: string;
   conversationHistory: { role: string; content: string }[];
   aiConfig: Record<string, unknown>;
-}): Promise<string> {
+}): Promise<CommanderResponse> {
+  const _files: CommanderResponse["files"] = [];
   const config = getConfig();
   const apiBase = config.WORKER_API_BASE ?? config.COMMANDER_API_BASE;
   const apiKey = config.WORKER_API_KEY ?? config.COMMANDER_API_KEY;
   const model = config.WORKER_MODEL;
 
   if (!apiBase || !apiKey) {
-    return "⚠️ Chưa cấu hình API. Liên hệ admin.";
+    return { text: "⚠️ Chưa cấu hình API. Liên hệ admin.", files: [] };
   }
 
   const systemPrompt = buildCommanderPrompt(input.tenantName, input.userName, input.userRole, input.aiConfig);
@@ -291,7 +316,7 @@ export async function processWithCommander(input: {
     if (!response.ok) {
       const err = await response.text();
       console.error(`[Pipeline] ✗ LLM error ${response.status} (${llmMs}ms): ${err.substring(0, 200)}`);
-      return `⚠️ AI tạm thời không khả dụng (${response.status})`;
+      return { text: `⚠️ AI tạm thời không khả dụng (${response.status})`, files: [] };
     }
 
     const data = await response.json() as any;
@@ -307,7 +332,7 @@ export async function processWithCommander(input: {
     if (toolCalls.length === 0) {
       console.error(`[Pipeline] No tool calls — text response only`);
       console.error(`[Pipeline] ─── END (${Date.now() - startTime}ms) ────────────`);
-      return markdownToHtml(content);
+      return { text: markdownToHtml(content), files: _files };
     }
 
     console.error(`[Pipeline] Tool calls: ${toolCalls.map(t => t.tool).join(", ")}`);
@@ -328,6 +353,11 @@ export async function processWithCommander(input: {
         const resultStr = JSON.stringify(result);
         toolResults.push(`${tc.tool}: ${resultStr}`);
         console.error(`[Pipeline]   ✓ ${tc.tool} (${toolMs}ms): ${resultStr.substring(0, 120)}`);
+
+        // Collect files to send
+        if (result && typeof result === "object" && (result as any).__send_file__) {
+          _files.push({ url: (result as any).url, fileName: (result as any).fileName, mimeType: (result as any).mimeType });
+        }
       }
     }
 
@@ -340,10 +370,10 @@ export async function processWithCommander(input: {
     }
 
     console.error(`[Pipeline] ─── END (${Date.now() - startTime}ms) ────────────`);
-    return markdownToHtml(responseMessage || content);
+    return { text: markdownToHtml(responseMessage || content), files: _files };
   } catch (e: any) {
     console.error(`[Pipeline] ✗ Error (${Date.now() - startTime}ms): ${e.message}`);
-    return `⚠️ Lỗi: ${e.message}`;
+    return { text: `⚠️ Lỗi: ${e.message}`, files: _files };
   }
 }
 

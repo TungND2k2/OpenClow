@@ -170,6 +170,27 @@ CREATE TABLE `messages` (
 CREATE INDEX `idx_messages_to_agent_status` ON `messages` (`to_agent_id`,`status`);--> statement-breakpoint
 CREATE INDEX `idx_messages_task` ON `messages` (`task_id`);--> statement-breakpoint
 CREATE INDEX `idx_messages_created` ON `messages` (`created_at`);--> statement-breakpoint
+CREATE TABLE `files` (
+	`id` text PRIMARY KEY NOT NULL,
+	`tenant_id` text NOT NULL,
+	`file_name` text NOT NULL,
+	`file_size` integer NOT NULL,
+	`mime_type` text NOT NULL,
+	`s3_key` text NOT NULL,
+	`s3_url` text,
+	`uploaded_by` text NOT NULL,
+	`channel` text NOT NULL,
+	`task_id` text,
+	`workflow_instance_id` text,
+	`metadata` text DEFAULT '{}',
+	`created_at` integer NOT NULL,
+	FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON UPDATE no action ON DELETE no action
+);
+--> statement-breakpoint
+CREATE INDEX `idx_files_tenant` ON `files` (`tenant_id`);--> statement-breakpoint
+CREATE INDEX `idx_files_uploaded_by` ON `files` (`uploaded_by`);--> statement-breakpoint
+CREATE INDEX `idx_files_task` ON `files` (`task_id`);--> statement-breakpoint
+CREATE INDEX `idx_files_created` ON `files` (`created_at`);--> statement-breakpoint
 CREATE TABLE `task_dependencies` (
 	`task_id` text NOT NULL,
 	`depends_on_id` text NOT NULL,

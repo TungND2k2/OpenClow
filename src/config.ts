@@ -21,6 +21,13 @@ const configSchema = z.object({
   WORKER_API_KEY: z.string().optional(),
   WORKER_MODEL: z.string().default("gpt-4o-mini"),
 
+  // S3 Storage
+  S3_ENDPOINT: z.string().optional(),
+  S3_REGION: z.string().default("us-east-1"),
+  S3_BUCKET: z.string().optional(),
+  S3_ACCESS_KEY: z.string().optional(),
+  S3_SECRET_KEY: z.string().optional(),
+
   // Telegram Bot
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_DEFAULT_TENANT_ID: z.string().optional(),

@@ -10,13 +10,14 @@
 import "dotenv/config";
 import { eq, and } from "drizzle-orm";
 import { getConfig } from "../config.js";
-import { processWithCommander } from "./agent-bridge.js";
+import { processWithCommander, type CommanderResponse } from "./agent-bridge.js";
 import { MessageQueue, type QueueJob } from "./message-queue.js";
 import { getOrCreateSession, appendMessage } from "../modules/conversations/conversation.service.js";
 import { getTenant } from "../modules/tenants/tenant.service.js";
 import { getDb } from "../db/connection.js";
 import { tenantUsers } from "../db/schema.js";
 import { newId } from "../utils/id.js";
+import { downloadAndUpload } from "../modules/storage/s3.service.js";
 
 const TELEGRAM_API = "https://api.telegram.org/bot";
 let _running = false;
@@ -47,6 +48,22 @@ async function sendTelegramMessage(chatId: string | number, text: string): Promi
     } catch {
       await callTelegram("sendMessage", { chat_id: chatId, text: chunk.replace(/<[^>]*>/g, "") });
     }
+  }
+}
+
+async function sendTelegramFile(chatId: string | number, fileUrl: string, fileName: string, caption?: string): Promise<void> {
+  try {
+    const mimeType = fileName.toLowerCase();
+    if (mimeType.match(/\.(jpg|jpeg|png|gif|webp)$/)) {
+      await callTelegram("sendPhoto", { chat_id: chatId, photo: fileUrl, caption });
+    } else if (mimeType.match(/\.(mp4|mov|avi)$/)) {
+      await callTelegram("sendVideo", { chat_id: chatId, video: fileUrl, caption });
+    } else {
+      await callTelegram("sendDocument", { chat_id: chatId, document: fileUrl, caption });
+    }
+  } catch (e: any) {
+    // Fallback: send URL as text
+    await sendTelegramMessage(chatId, `📎 <a href="${fileUrl}">${fileName}</a>${caption ? "\n" + caption : ""}`);
   }
 }
 
@@ -111,8 +128,13 @@ async function handleJob(job: QueueJob): Promise<void> {
     aiConfig: (tenant?.aiConfig ?? {}) as Record<string, unknown>,
   });
 
-  appendMessage(session.id, { role: "assistant", content: response, at: Date.now() });
-  await sendTelegramMessage(job.chatId, response);
+  appendMessage(session.id, { role: "assistant", content: response.text, at: Date.now() });
+  await sendTelegramMessage(job.chatId, response.text);
+
+  // Send files if any
+  for (const file of response.files) {
+    await sendTelegramFile(job.chatId, file.url, file.fileName);
+  }
 }
 
 // ── Poll loop — lightweight, just enqueues ───────────────────
@@ -130,11 +152,22 @@ async function pollLoop(): Promise<void> {
       for (const update of updates ?? []) {
         _offset = update.update_id + 1;
         const msg = update.message;
-        if (!msg?.text) continue;
+        if (!msg) continue;
 
         const userId = String(msg.from.id);
         const userName = msg.from.first_name ?? msg.from.username ?? "User";
         const userRole = getUserRole(userId, tenantId);
+
+        // ── Handle file uploads ──
+        const fileObj = msg.document ?? msg.photo?.at(-1) ?? msg.video ?? msg.audio ?? msg.voice;
+        if (fileObj && getConfig().S3_BUCKET) {
+          handleFileUpload(msg, fileObj, userId, userName, tenantId).catch(
+            (e: any) => console.error(`[Bot] File upload error: ${e.message}`)
+          );
+          continue;
+        }
+
+        if (!msg.text) continue;
 
         const job: QueueJob = {
           id: newId(),
@@ -158,6 +191,91 @@ async function pollLoop(): Promise<void> {
         console.error("[Bot] Poll error:", e.message);
       }
     }
+  }
+}
+
+// ── File upload handler ──────────────────────────────────────
+
+const ALLOWED_MIME_PREFIXES = ["image/", "application/pdf", "text/", "application/vnd", "application/json", "audio/", "video/"];
+const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+
+async function handleFileUpload(
+  msg: any,
+  fileObj: any,
+  userId: string,
+  userName: string,
+  tenantId: string
+): Promise<void> {
+  const chatId = msg.chat.id;
+  const fileId = fileObj.file_id;
+  const fileSize = fileObj.file_size ?? 0;
+  const fileName = fileObj.file_name ?? `file_${Date.now()}`;
+  const mimeType = fileObj.mime_type ?? "application/octet-stream";
+
+  // Size check
+  if (fileSize > MAX_FILE_SIZE) {
+    await sendTelegramMessage(chatId, `⚠️ File quá lớn (${(fileSize / 1024 / 1024).toFixed(1)}MB). Tối đa 20MB.`);
+    return;
+  }
+
+  // Type check
+  const allowed = ALLOWED_MIME_PREFIXES.some((p) => mimeType.startsWith(p));
+  if (!allowed) {
+    await sendTelegramMessage(chatId, `⚠️ Loại file không hỗ trợ: ${mimeType}`);
+    return;
+  }
+
+  console.error(`[Bot] File from ${userName}: ${fileName} (${(fileSize / 1024).toFixed(1)}KB, ${mimeType})`);
+  await sendTelegramMessage(chatId, `📤 Đang upload <b>${fileName}</b>...`);
+
+  try {
+    // Get file URL from Telegram
+    const token = getConfig().TELEGRAM_BOT_TOKEN!;
+    const fileInfo = await callTelegram("getFile", { file_id: fileId });
+    const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+
+    // Download from Telegram → upload to S3
+    const result = await downloadAndUpload({
+      url: fileUrl,
+      tenantId,
+      fileName,
+      mimeType,
+      uploadedBy: userId,
+      channel: "telegram",
+    });
+
+    const caption = msg.caption ?? "";
+    const sizeStr = fileSize > 1024 * 1024
+      ? `${(fileSize / 1024 / 1024).toFixed(1)}MB`
+      : `${(fileSize / 1024).toFixed(1)}KB`;
+
+    await sendTelegramMessage(chatId,
+      `✅ <b>File đã lưu</b>\n` +
+      `📎 ${fileName} (${sizeStr})\n` +
+      `🔗 ID: <code>${result.id}</code>` +
+      (caption ? `\n📝 ${caption}` : "")
+    );
+
+    // If has caption, process it as a message with file context
+    if (caption) {
+      const job: QueueJob = {
+        id: newId(),
+        chatId,
+        userId,
+        userName,
+        userRole: getUserRole(userId, tenantId),
+        text: `[File uploaded: ${fileName} (${mimeType}, ${sizeStr}) → ID: ${result.id}] ${caption}`,
+        tenantId,
+        priority: 3,
+        createdAt: Date.now(),
+        retries: 0,
+        maxRetries: 2,
+      };
+      _queue.enqueue(job);
+    }
+  } catch (e: any) {
+    console.error(`[Bot] Upload failed: ${e.message}`);
+    await sendTelegramMessage(chatId, `⚠️ Upload thất bại: ${e.message}`);
   }
 }
 
