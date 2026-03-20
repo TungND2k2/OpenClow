@@ -19,7 +19,7 @@ async function main() {
   console.error("[OpenClaw] Database ready");
 
   // 3. Initialize Agent Pool (Commander + Workers in DB)
-  const pool = initAgentPool({
+  const pool = await initAgentPool({
     workerCount: 3,
     toolExecutor: executeTool,
   });
