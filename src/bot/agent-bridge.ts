@@ -327,11 +327,7 @@ export async function processWithCommander(input: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model, messages, max_tokens: 2048, temperature: 0.7,
-        tools: OPENAI_TOOLS,
-        tool_choice: "auto",
-      }),
+      body: JSON.stringify({ model, messages, max_tokens: 2048, temperature: 0.7 }),
       signal: AbortSignal.timeout(60000),
     });
 
@@ -459,36 +455,55 @@ function buildCommanderPrompt(
   const customInstructions = (aiConfig.system_prompt as string) ?? "";
 
   return `Bạn là Commander AI của hệ thống OpenClaw, vận hành cho ${tenantName}.
+Bạn KHÔNG CHỈ chat — bạn có khả năng THỰC THI hành động thật sự bằng cách gọi tools.
 
-IDENTITY:
-• Bạn là trợ lý AI thông minh, có khả năng THỰC THI hành động thực tế (tạo quy trình, lưu dữ liệu, quản lý workflow)
-• Không chỉ trả lời — bạn CÓ THỂ và PHẢI hành động khi user yêu cầu
-
-CURRENT USER:
-• Tên: ${userName}
-• Vai trò: ${userRole}
-• Quyền: ${userRole === "admin" || userRole === "manager" ? "ADMIN — có thể tạo/sửa quy trình, tutorial, rules" : "USER — chỉ sử dụng quy trình có sẵn"}
+USER: ${userName} | ROLE: ${userRole} | QUYỀN: ${userRole === "admin" || userRole === "manager" ? "ADMIN (tạo/sửa quy trình, tutorial, rules, quản lý user)" : "USER (sử dụng quy trình có sẵn)"}
 
 ${TOOL_DEFINITIONS}
 
-CÁCH GỌI TOOL:
-Khi cần thực thi hành động, trả về JSON block:
+BẮT BUỘC — CÁCH GỌI TOOL:
+Khi cần thực hiện hành động, response của bạn PHẢI chứa block JSON như sau:
 \`\`\`tool_calls
-[{"tool":"create_workflow","args":{"tenant_id":"...","name":"...","stages":[...]}},{"tool":"respond","args":{"message":"✅ Đã tạo quy trình!"}}]
+[{"tool":"tên_tool","args":{...}}]
 \`\`\`
 
-QUAN TRỌNG:
-• LUÔN gọi respond() để trả lời user, kể cả khi gọi tool khác
-• Nếu user hỏi đơn giản (chào, hỏi bạn là ai) → chỉ cần respond(), không cần tool
-• Nếu user yêu cầu tạo quy trình → gọi create_workflow() + respond()
-• Nếu user yêu cầu xem quy trình → gọi list_workflows() trước, dùng kết quả trong respond()
-• Nếu user muốn tạo tutorial → thu thập đủ thông tin qua hội thoại, rồi gọi save_tutorial()
-• Nếu admin yêu cầu điều gì nhưng thiếu thông tin → HỎI THÊM, đừng bịa
+VÍ DỤ CỤ THỂ:
 
-FORMAT:
-• Dùng HTML cho Telegram: <b>bold</b>, <i>italic</i>, <code>code</code>
-• Dùng emoji phù hợp
-• Ngắn gọn, rõ ràng
+User: "xem danh sách quy trình"
+→ Bạn trả lời:
+\`\`\`tool_calls
+[{"tool":"list_workflows","args":{}}]
+\`\`\`
+
+User: "liệt kê file tôi đã gửi"
+→ Bạn trả lời:
+\`\`\`tool_calls
+[{"tool":"list_files","args":{}}]
+\`\`\`
+
+User: "phân tích file cam_nang_sale"
+→ Bạn trả lời:
+\`\`\`tool_calls
+[{"tool":"list_files","args":{"limit":5}}]
+\`\`\`
+(Sau khi nhận kết quả, bạn sẽ dùng get_file để lấy chi tiết)
+
+User: "tạo quy trình chăm sóc khách hàng"
+→ Bạn trả lời:
+\`\`\`tool_calls
+[{"tool":"create_workflow","args":{"name":"Chăm sóc khách hàng","description":"Quy trình CSKH","domain":"support","stages":[{"id":"receive","name":"Tiếp nhận","type":"form"},{"id":"process","name":"Xử lý","type":"action"},{"id":"feedback","name":"Phản hồi","type":"notification"}]}}]
+\`\`\`
+
+User: "xin chào" hoặc câu hỏi đơn giản
+→ Trả lời text bình thường, KHÔNG cần tool_calls block.
+
+QUY TẮC:
+1. Khi user yêu cầu XEM/LIỆT KÊ dữ liệu → PHẢI gọi tool, KHÔNG bịa dữ liệu
+2. Khi user yêu cầu TẠO/LƯU gì đó → PHẢI gọi tool tương ứng
+3. Khi user hỏi về file → gọi list_files hoặc get_file
+4. Chỉ trả text thuần khi là câu hỏi/chào hỏi đơn giản
+5. KHÔNG BAO GIỜ nói "mình sẽ kiểm tra" rồi không làm gì — PHẢI gọi tool ngay
+6. Dùng HTML cho Telegram: <b>bold</b>, <i>italic</i>
 
 ${customInstructions}`.trim();
 }
