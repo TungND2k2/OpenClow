@@ -22,20 +22,20 @@ import { validatePromotion } from "./authorization.js";
 /**
  * Set the parent (supervisor) of an agent in the hierarchy.
  */
-export function setAgentParent(
+export async function setAgentParent(
   agentId: string,
   parentAgentId: string
-): void {
+): Promise<void> {
   const db = getDb();
 
-  const agent = db
+  const agent = (await db
     .select({ id: agents.id, role: agents.role })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+    .limit(1))[0];
   if (!agent) throw new Error(`Agent ${agentId} not found`);
 
-  const parent = db
+  const parent = (await db
     .select({
       id: agents.id,
       role: agents.role,
@@ -43,7 +43,7 @@ export function setAgentParent(
     })
     .from(agents)
     .where(eq(agents.id, parentAgentId))
-    .get();
+    .limit(1))[0];
   if (!parent) throw new Error(`Parent agent ${parentAgentId} not found`);
 
   // Parent must have higher authority
@@ -55,7 +55,7 @@ export function setAgentParent(
   }
 
   // Check max subordinates
-  const currentCount = countDirectChildren(parentAgentId);
+  const currentCount = await countDirectChildren(parentAgentId);
   const maxSubs = MAX_SUBORDINATES[parent.role as Role];
   if (currentCount >= maxSubs) {
     throw new Error(
@@ -64,50 +64,49 @@ export function setAgentParent(
   }
 
   // Prevent circular: parent cannot be a descendant of agent
-  if (isAncestorOf(agentId, parentAgentId)) {
+  if (await isAncestorOf(agentId, parentAgentId)) {
     throw new Error(
       `Cannot set ${parentAgentId} as parent of ${agentId}: would create circular hierarchy`
     );
   }
 
   // Remove old hierarchy entries and re-insert
-  removeHierarchyEntries(agentId);
+  await removeHierarchyEntries(agentId);
 
   // Update agent record
-  db.update(agents)
+  await db.update(agents)
     .set({ parentAgentId })
-    .where(eq(agents.id, agentId))
-    .run();
+    .where(eq(agents.id, agentId));
 
   // Re-insert hierarchy entries with new parent
-  insertHierarchyEntries(agentId, parentAgentId);
+  await insertHierarchyEntries(agentId, parentAgentId);
 
   // Re-attach existing children
-  const children = getDirectChildren(agentId);
+  const children = await getDirectChildren(agentId);
   for (const childId of children) {
-    removeHierarchyEntries(childId);
-    insertHierarchyEntries(childId, agentId);
+    await removeHierarchyEntries(childId);
+    await insertHierarchyEntries(childId, agentId);
   }
 }
 
 /**
  * Promote or demote an agent.
  */
-export function promoteAgent(
+export async function promoteAgent(
   agentId: string,
   newRole: Role,
   requestingAgentId: string
-): void {
+): Promise<void> {
   const db = getDb();
 
   // Check requesting agent is authorized
-  assertAuthorized({
+  await assertAuthorized({
     actingAgentId: requestingAgentId,
     action: "promote_agent",
     targetAgentId: agentId,
   });
 
-  const agent = db
+  const agent = (await db
     .select({
       role: agents.role,
       performanceScore: agents.performanceScore,
@@ -115,14 +114,14 @@ export function promoteAgent(
     })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+    .limit(1))[0];
   if (!agent) throw new Error(`Agent ${agentId} not found`);
 
-  const requestingAgent = db
+  const requestingAgent = (await db
     .select({ role: agents.role })
     .from(agents)
     .where(eq(agents.id, requestingAgentId))
-    .get();
+    .limit(1))[0];
   if (!requestingAgent) {
     throw new Error(`Requesting agent ${requestingAgentId} not found`);
   }
@@ -141,31 +140,30 @@ export function promoteAgent(
 
   const newLevel = AUTHORITY_LEVELS[newRole];
 
-  db.update(agents)
+  await db.update(agents)
     .set({
       role: newRole,
       authorityLevel: newLevel,
       updatedAt: Date.now(),
     })
-    .where(eq(agents.id, agentId))
-    .run();
+    .where(eq(agents.id, agentId));
 }
 
 /**
  * Get all subordinates of an agent with their info.
  */
-export function getSubordinates(
+export async function getSubordinates(
   agentId: string,
   depth?: number
-): {
+): Promise<{
   id: string;
   name: string;
   role: string;
   status: string;
   depth: number;
-}[] {
+}[]> {
   const db = getDb();
-  const descendants = getDescendants(agentId, depth);
+  const descendants = await getDescendants(agentId, depth);
   if (descendants.length === 0) return [];
 
   const ids = descendants.map((d) => d.descendantId);
@@ -173,15 +171,14 @@ export function getSubordinates(
     descendants.map((d) => [d.descendantId, d.depth])
   );
 
-  const agentRows = db
+  const agentRows = (await db
     .select({
       id: agents.id,
       name: agents.name,
       role: agents.role,
       status: agents.status,
     })
-    .from(agents)
-    .all()
+    .from(agents))
     .filter((a) => ids.includes(a.id));
 
   return agentRows.map((a) => ({
@@ -193,11 +190,11 @@ export function getSubordinates(
 /**
  * Get the chain of command from agent up to Commander.
  */
-export function getChainOfCommand(
+export async function getChainOfCommand(
   agentId: string
-): { id: string; name: string; role: string; depth: number }[] {
+): Promise<{ id: string; name: string; role: string; depth: number }[]> {
   const db = getDb();
-  const ancestors = getAncestors(agentId);
+  const ancestors = await getAncestors(agentId);
   if (ancestors.length === 0) return [];
 
   const ids = ancestors.map((a) => a.ancestorId);
@@ -205,14 +202,13 @@ export function getChainOfCommand(
     ancestors.map((a) => [a.ancestorId, a.depth])
   );
 
-  const agentRows = db
+  const agentRows = (await db
     .select({
       id: agents.id,
       name: agents.name,
       role: agents.role,
     })
-    .from(agents)
-    .all()
+    .from(agents))
     .filter((a) => ids.includes(a.id));
 
   return agentRows
@@ -226,10 +222,10 @@ export function getChainOfCommand(
 /**
  * Build the full hierarchy tree starting from Commander.
  */
-export function getHierarchyTree(): HierarchyNode[] {
+export async function getHierarchyTree(): Promise<HierarchyNode[]> {
   const db = getDb();
 
-  const allAgents = db
+  const allAgents = await db
     .select({
       id: agents.id,
       name: agents.name,
@@ -238,8 +234,7 @@ export function getHierarchyTree(): HierarchyNode[] {
       status: agents.status,
       parentAgentId: agents.parentAgentId,
     })
-    .from(agents)
-    .all();
+    .from(agents);
 
   // Build lookup
   const byId = new Map<string, (typeof allAgents)[number]>();

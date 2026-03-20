@@ -22,19 +22,19 @@ export function calculateCost(model: string, inputTokens: number, outputTokens: 
 /**
  * Record token usage for an agent/task.
  */
-export function recordUsage(input: {
+export async function recordUsage(input: {
   agentId: string;
   taskId?: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
-}): { id: string; costUsd: number } {
+}): Promise<{ id: string; costUsd: number }> {
   const db = getDb();
   const now = nowMs();
   const id = newId();
   const costUsd = calculateCost(input.model, input.inputTokens, input.outputTokens);
 
-  db.insert(tokenUsage).values({
+  await db.insert(tokenUsage).values({
     id,
     agentId: input.agentId,
     taskId: input.taskId ?? null,
@@ -43,10 +43,10 @@ export function recordUsage(input: {
     outputTokens: input.outputTokens,
     costUsd,
     createdAt: now,
-  }).run();
+  });
 
   // Update agent's cost_spent
-  db.run(sql`UPDATE agents SET cost_spent_usd = cost_spent_usd + ${costUsd} WHERE id = ${input.agentId}`);
+  await db.execute(sql`UPDATE agents SET cost_spent_usd = cost_spent_usd + ${costUsd} WHERE id = ${input.agentId}`);
 
   return { id, costUsd };
 }
@@ -54,12 +54,12 @@ export function recordUsage(input: {
 /**
  * Check if an agent is within budget.
  */
-export function checkBudget(agentId: string): { withinBudget: boolean; spent: number; budget: number | null } {
+export async function checkBudget(agentId: string): Promise<{ withinBudget: boolean; spent: number; budget: number | null }> {
   const db = getDb();
-  const agent = db.select({
+  const agent = (await db.select({
     costBudgetUsd: agents.costBudgetUsd,
     costSpentUsd: agents.costSpentUsd,
-  }).from(agents).where(eq(agents.id, agentId)).get();
+  }).from(agents).where(eq(agents.id, agentId)).limit(1))[0];
 
   if (!agent) return { withinBudget: false, spent: 0, budget: null };
   if (agent.costBudgetUsd === null) return { withinBudget: true, spent: agent.costSpentUsd, budget: null };

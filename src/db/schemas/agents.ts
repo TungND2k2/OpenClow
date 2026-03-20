@@ -1,37 +1,36 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
   integer,
+  bigint,
   real,
+  boolean,
+  jsonb,
   primaryKey,
   index,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 
 // ============================================================
 // agent_templates — "job descriptions" for spawning agents
 // ============================================================
-export const agentTemplates = sqliteTable(
+export const agentTemplates = pgTable(
   "agent_templates",
   {
     id: text("id").primaryKey(),
     name: text("name").notNull().unique(),
-    role: text("role", {
-      enum: ["commander", "supervisor", "specialist", "worker"],
-    }).notNull(),
+    role: text("role").notNull(),
     systemPrompt: text("system_prompt").notNull(),
-    capabilities: text("capabilities", { mode: "json" }).notNull().default("[]"),
-    tools: text("tools", { mode: "json" }).notNull().default("[]"), // empty = all tools
-    engine: text("engine", {
-      enum: ["claude-sdk", "fast-api"],
-    }).notNull().default("fast-api"),
+    capabilities: jsonb("capabilities").notNull().default([]),
+    tools: jsonb("tools").notNull().default([]), // empty = all tools
+    engine: text("engine").notNull().default("fast-api"),
     maxConcurrentTasks: integer("max_concurrent_tasks").notNull().default(1),
     maxToolLoops: integer("max_tool_loops").notNull().default(5),
     costBudgetUsd: real("cost_budget_usd"),
-    autoSpawn: integer("auto_spawn").notNull().default(0), // 1 = spawn on startup
+    autoSpawn: boolean("auto_spawn").notNull().default(false),
     autoSpawnCount: integer("auto_spawn_count").notNull().default(1),
-    status: text("status", { enum: ["active", "archived"] }).notNull().default("active"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    status: text("status").notNull().default("active"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_templates_role").on(table.role),
@@ -42,32 +41,21 @@ export const agentTemplates = sqliteTable(
 // ============================================================
 // agents — instances spawned from templates
 // ============================================================
-export const agents = sqliteTable(
+export const agents = pgTable(
   "agents",
   {
     id: text("id").primaryKey(),
     name: text("name").notNull(),
     templateId: text("template_id").references(() => agentTemplates.id),
-    role: text("role", {
-      enum: ["commander", "supervisor", "specialist", "worker"],
-    }).notNull(),
+    role: text("role").notNull(),
     authorityLevel: integer("authority_level").notNull(),
-    capabilities: text("capabilities", { mode: "json" })
+    capabilities: jsonb("capabilities")
       .notNull()
-      .default("[]"),
+      .default([]),
     parentAgentId: text("parent_agent_id").references(
       (): any => agents.id
     ),
-    status: text("status", {
-      enum: [
-        "registering",
-        "idle",
-        "busy",
-        "suspended",
-        "offline",
-        "deactivated",
-      ],
-    })
+    status: text("status")
       .notNull()
       .default("registering"),
     performanceScore: real("performance_score").notNull().default(0.5),
@@ -76,10 +64,10 @@ export const agents = sqliteTable(
     maxConcurrentTasks: integer("max_concurrent_tasks").notNull().default(1),
     costBudgetUsd: real("cost_budget_usd"),
     costSpentUsd: real("cost_spent_usd").notNull().default(0.0),
-    config: text("config", { mode: "json" }).default("{}"),
-    lastHeartbeat: integer("last_heartbeat"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    config: jsonb("config").default({}),
+    lastHeartbeat: bigint("last_heartbeat", { mode: "number" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_agents_status").on(table.status),
@@ -92,7 +80,7 @@ export const agents = sqliteTable(
 // ============================================================
 // agent_hierarchy (closure table)
 // ============================================================
-export const agentHierarchy = sqliteTable(
+export const agentHierarchy = pgTable(
   "agent_hierarchy",
   {
     ancestorId: text("ancestor_id")

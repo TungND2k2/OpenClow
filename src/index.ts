@@ -15,7 +15,7 @@ async function main() {
   console.error(`[OpenClaw] Starting (env=${config.NODE_ENV})`);
 
   // 2. Run migrations
-  runMigrations();
+  await runMigrations();
   console.error("[OpenClaw] Database ready");
 
   // 3. Initialize Agent Pool (Commander + Workers in DB)

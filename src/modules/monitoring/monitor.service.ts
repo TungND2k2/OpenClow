@@ -9,16 +9,16 @@ import { sendMessage } from "../messaging/message.service.js";
 /**
  * Suspend an agent — freeze it and reassign its tasks.
  */
-export function suspendAgent(
+export async function suspendAgent(
   agentId: string,
   reason: string,
   requestingAgentId: string
-): { reassignedTaskIds: string[] } {
+): Promise<{ reassignedTaskIds: string[] }> {
   const db = getDb();
-  updateAgentStatus(agentId, "suspended");
+  await updateAgentStatus(agentId, "suspended");
 
   // Reassign active tasks
-  const activeTasks = db
+  const activeTasks = await db
     .select({ id: tasks.id })
     .from(tasks)
     .where(
@@ -26,24 +26,22 @@ export function suspendAgent(
         eq(tasks.assignedAgentId, agentId),
         sql`${tasks.status} IN ('assigned', 'in_progress')`
       )
-    )
-    .all();
+    );
 
   const reassignedTaskIds: string[] = [];
   for (const task of activeTasks) {
-    db.update(tasks)
+    await db.update(tasks)
       .set({
         status: "pending" as const,
         assignedAgentId: null,
         assignedAt: null,
         startedAt: null,
       })
-      .where(eq(tasks.id, task.id))
-      .run();
+      .where(eq(tasks.id, task.id));
     reassignedTaskIds.push(task.id);
   }
 
-  recordDecision({
+  await recordDecision({
     agentId: requestingAgentId,
     decisionType: "kill",
     targetAgentId: agentId,
@@ -56,33 +54,32 @@ export function suspendAgent(
 /**
  * Permanently deactivate an agent.
  */
-export function killAgent(
+export async function killAgent(
   agentId: string,
   reason: string,
   requestingAgentId: string
-): void {
-  const result = suspendAgent(agentId, reason, requestingAgentId);
-  updateAgentStatus(agentId, "deactivated");
+): Promise<void> {
+  const result = await suspendAgent(agentId, reason, requestingAgentId);
+  await updateAgentStatus(agentId, "deactivated");
 }
 
 /**
  * Set cost budget for an agent.
  */
-export function setAgentBudget(
+export async function setAgentBudget(
   agentId: string,
   budgetUsd: number
-): void {
+): Promise<void> {
   const db = getDb();
-  db.update(agents)
+  await db.update(agents)
     .set({ costBudgetUsd: budgetUsd, updatedAt: nowMs() })
-    .where(eq(agents.id, agentId))
-    .run();
+    .where(eq(agents.id, agentId));
 }
 
 /**
  * Get a dashboard summary of the system.
  */
-export function getDashboard(): {
+export async function getDashboard(): Promise<{
   agents: {
     total: number;
     byStatus: Record<string, number>;
@@ -97,14 +94,13 @@ export function getDashboard(): {
     totalInputTokens: number;
     totalOutputTokens: number;
   };
-} {
+}> {
   const db = getDb();
 
   // Agent stats
-  const allAgents = db
+  const allAgents = await db
     .select({ status: agents.status, role: agents.role })
-    .from(agents)
-    .all();
+    .from(agents);
 
   const agentsByStatus: Record<string, number> = {};
   const agentsByRole: Record<string, number> = {};
@@ -114,10 +110,9 @@ export function getDashboard(): {
   }
 
   // Task stats
-  const allTasks = db
+  const allTasks = await db
     .select({ status: tasks.status })
-    .from(tasks)
-    .all();
+    .from(tasks);
 
   const tasksByStatus: Record<string, number> = {};
   for (const t of allTasks) {
@@ -125,14 +120,13 @@ export function getDashboard(): {
   }
 
   // Cost stats
-  const costRow = db
+  const costRow = (await db
     .select({
       totalCost: sql<number>`COALESCE(SUM(${tokenUsage.costUsd}), 0)`,
       totalInput: sql<number>`COALESCE(SUM(${tokenUsage.inputTokens}), 0)`,
       totalOutput: sql<number>`COALESCE(SUM(${tokenUsage.outputTokens}), 0)`,
     })
-    .from(tokenUsage)
-    .get();
+    .from(tokenUsage))[0];
 
   return {
     agents: {
@@ -155,13 +149,13 @@ export function getDashboard(): {
 /**
  * Find stale tasks (in_progress for too long).
  */
-export function findStaleTasks(
+export async function findStaleTasks(
   thresholdMs: number = 600000 // 10 minutes default
-): { id: string; title: string; assignedAgentId: string | null; startedAt: number }[] {
+): Promise<{ id: string; title: string; assignedAgentId: string | null; startedAt: number }[]> {
   const db = getDb();
   const cutoff = nowMs() - thresholdMs;
 
-  return db
+  return await db
     .select({
       id: tasks.id,
       title: tasks.title,
@@ -174,6 +168,5 @@ export function findStaleTasks(
         eq(tasks.status, "in_progress"),
         sql`${tasks.startedAt} IS NOT NULL AND ${tasks.startedAt} < ${cutoff}`
       )
-    )
-    .all() as any[];
+    ) as any[];
 }

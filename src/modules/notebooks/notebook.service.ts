@@ -20,19 +20,19 @@ export interface NotebookEntry {
 /**
  * Write or update a notebook entry (upsert by namespace + key).
  */
-export function notebookWrite(input: {
+export async function notebookWrite(input: {
   namespace: string;
   key: string;
   value: string;
   contentType?: ContentType;
   agentId?: string;
-}): NotebookEntry {
+}): Promise<NotebookEntry> {
   const db = getDb();
   const now = nowMs();
   const contentType = input.contentType ?? "text/plain";
 
   // Check if entry exists
-  const existing = db
+  const existing = (await db
     .select({ id: notebooks.id })
     .from(notebooks)
     .where(
@@ -41,19 +41,18 @@ export function notebookWrite(input: {
         eq(notebooks.key, input.key)
       )
     )
-    .get();
+    .limit(1))[0];
 
   if (existing) {
-    db.update(notebooks)
+    await db.update(notebooks)
       .set({
         value: input.value,
         contentType,
         updatedAt: now,
       })
-      .where(eq(notebooks.id, existing.id))
-      .run();
+      .where(eq(notebooks.id, existing.id));
 
-    return notebookRead(input.namespace, input.key)!;
+    return (await notebookRead(input.namespace, input.key))!;
   }
 
   const id = newId();
@@ -68,7 +67,7 @@ export function notebookWrite(input: {
     updatedAt: now,
   };
 
-  db.insert(notebooks).values(record).run();
+  await db.insert(notebooks).values(record);
 
   return {
     ...record,
@@ -79,18 +78,18 @@ export function notebookWrite(input: {
 /**
  * Read a notebook entry by namespace + key.
  */
-export function notebookRead(
+export async function notebookRead(
   namespace: string,
   key: string
-): NotebookEntry | null {
+): Promise<NotebookEntry | null> {
   const db = getDb();
-  const row = db
+  const row = (await db
     .select()
     .from(notebooks)
     .where(
       and(eq(notebooks.namespace, namespace), eq(notebooks.key, key))
     )
-    .get();
+    .limit(1))[0];
 
   if (!row) return null;
 
@@ -103,10 +102,10 @@ export function notebookRead(
 /**
  * List entries in a namespace, optionally filtered by key prefix.
  */
-export function notebookList(
+export async function notebookList(
   namespace: string,
   keyPrefix?: string
-): { key: string; contentType: ContentType; updatedAt: number }[] {
+): Promise<{ key: string; contentType: ContentType; updatedAt: number }[]> {
   const db = getDb();
   const conditions: any[] = [eq(notebooks.namespace, namespace)];
 
@@ -114,15 +113,14 @@ export function notebookList(
     conditions.push(like(notebooks.key, `${keyPrefix}%`));
   }
 
-  const rows = db
+  const rows = await db
     .select({
       key: notebooks.key,
       contentType: notebooks.contentType,
       updatedAt: notebooks.updatedAt,
     })
     .from(notebooks)
-    .where(and(...conditions))
-    .all();
+    .where(and(...conditions));
 
   return rows.map((r) => ({
     key: r.key,
@@ -134,13 +132,13 @@ export function notebookList(
 /**
  * Delete a notebook entry.
  */
-export function notebookDelete(namespace: string, key: string): boolean {
+export async function notebookDelete(namespace: string, key: string): Promise<boolean> {
   const db = getDb();
-  const result = db
+  const result = await db
     .delete(notebooks)
     .where(
       and(eq(notebooks.namespace, namespace), eq(notebooks.key, key))
     )
-    .run();
-  return result.changes > 0;
+    .returning({ id: notebooks.id });
+  return result.length > 0;
 }

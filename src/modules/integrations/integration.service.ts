@@ -21,7 +21,7 @@ export async function sendViaIntegration(
   payload: Record<string, unknown>
 ): Promise<SendResult> {
   const db = getDb();
-  const row = db.select().from(integrations).where(eq(integrations.id, integrationId)).get();
+  const row = (await db.select().from(integrations).where(eq(integrations.id, integrationId)).limit(1))[0];
   if (!row) return { success: false, error: "Integration not found" };
   if (row.status !== "active") return { success: false, error: `Integration is ${row.status}` };
 
@@ -32,11 +32,11 @@ export async function sendViaIntegration(
   const result = await connector.send(payload, config);
 
   // Update last_used_at
-  db.update(integrations).set({ lastUsedAt: nowMs() }).where(eq(integrations.id, integrationId)).run();
+  await db.update(integrations).set({ lastUsedAt: nowMs() }).where(eq(integrations.id, integrationId));
 
   // If failed, mark integration as error
   if (!result.success) {
-    db.update(integrations).set({ status: "error" as const, updatedAt: nowMs() }).where(eq(integrations.id, integrationId)).run();
+    await db.update(integrations).set({ status: "error" as const, updatedAt: nowMs() }).where(eq(integrations.id, integrationId));
   }
 
   return result;
@@ -47,7 +47,7 @@ export async function sendViaIntegration(
  */
 export async function testIntegration(integrationId: string): Promise<SendResult> {
   const db = getDb();
-  const row = db.select().from(integrations).where(eq(integrations.id, integrationId)).get();
+  const row = (await db.select().from(integrations).where(eq(integrations.id, integrationId)).limit(1))[0];
   if (!row) return { success: false, error: "Integration not found" };
 
   const connector = connectors[row.type];

@@ -16,7 +16,7 @@ export function registerIntegrationTools(server: McpServer): void {
     const db = getDb();
     const now = nowMs();
     const id = newId();
-    db.insert(integrations).values({
+    await db.insert(integrations).values({
       id,
       tenantId: params.tenant_id,
       name: params.name,
@@ -25,7 +25,7 @@ export function registerIntegrationTools(server: McpServer): void {
       status: "active",
       createdAt: now,
       updatedAt: now,
-    }).run();
+    });
     return { content: [{ type: "text", text: JSON.stringify({ id, name: params.name }, null, 2) }] };
   });
 
@@ -34,7 +34,7 @@ export function registerIntegrationTools(server: McpServer): void {
     test_payload: z.record(z.unknown()),
   }, async ({ integration_id, test_payload }) => {
     const db = getDb();
-    const row = db.select().from(integrations).where(eq(integrations.id, integration_id)).get();
+    const row = (await db.select().from(integrations).where(eq(integrations.id, integration_id)).limit(1))[0];
     if (!row) return { content: [{ type: "text", text: "Not found" }], isError: true };
 
     // For now just validate the integration exists and return config type
@@ -53,7 +53,7 @@ export function registerIntegrationTools(server: McpServer): void {
     const db = getDb();
     const conditions: any[] = [eq(integrations.tenantId, params.tenant_id)];
     if (params.type) conditions.push(eq(integrations.type, params.type as any));
-    const rows = db.select().from(integrations).where(and(...conditions)).all();
+    const rows = await db.select().from(integrations).where(and(...conditions));
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   });
 }

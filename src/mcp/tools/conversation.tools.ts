@@ -19,16 +19,16 @@ export function registerConversationTools(server: McpServer): void {
     const now = nowMs();
 
     // Find or create session
-    let session = db.select().from(conversationSessions)
+    let session = (await db.select().from(conversationSessions)
       .where(and(
         eq(conversationSessions.tenantId, params.tenant_id),
         eq(conversationSessions.channel, params.channel),
         eq(conversationSessions.channelUserId, params.channel_user_id),
-      )).get();
+      )).limit(1))[0];
 
     if (!session) {
       const id = newId();
-      db.insert(conversationSessions).values({
+      await db.insert(conversationSessions).values({
         id,
         tenantId: params.tenant_id,
         channel: params.channel,
@@ -38,20 +38,20 @@ export function registerConversationTools(server: McpServer): void {
         state: JSON.stringify({ messages: [{ role: "user", content: params.message, at: now }] }),
         lastMessageAt: now,
         createdAt: now,
-      }).run();
-      session = db.select().from(conversationSessions).where(eq(conversationSessions.id, id)).get();
+      });
+      session = (await db.select().from(conversationSessions).where(eq(conversationSessions.id, id)).limit(1))[0];
     } else {
       // Append message to state
       const state = (session.state as any) ?? { messages: [] };
       state.messages = state.messages ?? [];
       state.messages.push({ role: "user", content: params.message, at: now });
-      db.update(conversationSessions).set({
+      await db.update(conversationSessions).set({
         state: JSON.stringify(state),
         lastMessageAt: now,
         userName: params.user_name ?? session.userName,
         userRole: params.user_role ?? session.userRole,
-      }).where(eq(conversationSessions.id, session.id)).run();
-      session = db.select().from(conversationSessions).where(eq(conversationSessions.id, session.id)).get();
+      }).where(eq(conversationSessions.id, session.id));
+      session = (await db.select().from(conversationSessions).where(eq(conversationSessions.id, session.id)).limit(1))[0];
     }
 
     return { content: [{ type: "text", text: JSON.stringify({
@@ -65,7 +65,7 @@ export function registerConversationTools(server: McpServer): void {
     session_id: z.string(),
   }, async ({ session_id }) => {
     const db = getDb();
-    const row = db.select().from(conversationSessions).where(eq(conversationSessions.id, session_id)).get();
+    const row = (await db.select().from(conversationSessions).where(eq(conversationSessions.id, session_id)).limit(1))[0];
     if (!row) return { content: [{ type: "text", text: "Not found" }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(row, null, 2) }] };
   });

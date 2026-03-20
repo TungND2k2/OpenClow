@@ -19,14 +19,14 @@ import type {
 /**
  * Decompose a task into subtasks and create an execution plan.
  */
-export function decomposeTask(input: DecomposeInput): {
+export async function decomposeTask(input: DecomposeInput): Promise<{
   plan: ExecutionPlanRecord;
   subtaskIds: string[];
-} {
+}> {
   const db = getDb();
   const now = nowMs();
 
-  const parentTask = getTask(input.taskId);
+  const parentTask = await getTask(input.taskId);
   if (!parentTask) throw new Error(`Task ${input.taskId} not found`);
 
   if (input.subtasks.length === 0) {
@@ -40,7 +40,7 @@ export function decomposeTask(input: DecomposeInput): {
 
   for (let i = 0; i < input.subtasks.length; i++) {
     const sub = input.subtasks[i];
-    const created = createTask({
+    const created = await createTask({
       title: sub.title,
       description: sub.description,
       parentTaskId: input.taskId,
@@ -66,7 +66,7 @@ export function decomposeTask(input: DecomposeInput): {
         if (depIdx < 0 || depIdx >= subtaskIds.length) {
           throw new Error(`Invalid dependency index ${depIdx} for subtask ${i}`);
         }
-        addDependency(subtaskIds[i], subtaskIds[depIdx]);
+        await addDependency(subtaskIds[i], subtaskIds[depIdx]);
         nodes[i].dependsOn.push(subtaskIds[depIdx]);
         edges.push({ from: subtaskIds[depIdx], to: subtaskIds[i] });
       }
@@ -78,7 +78,7 @@ export function decomposeTask(input: DecomposeInput): {
   const planId = newId();
   const planGraph: PlanGraph = { nodes, edges };
 
-  db.insert(executionPlans)
+  await db.insert(executionPlans)
     .values({
       id: planId,
       rootTaskId: input.taskId,
@@ -88,14 +88,13 @@ export function decomposeTask(input: DecomposeInput): {
       status: "draft",
       createdAt: now,
       updatedAt: now,
-    })
-    .run();
+    });
 
   // Mark parent as delegated
-  delegateTask(input.taskId);
+  await delegateTask(input.taskId);
 
   // Record decision
-  recordDecision({
+  await recordDecision({
     agentId: input.agentId,
     decisionType: "decompose",
     taskId: input.taskId,
@@ -124,24 +123,23 @@ export function decomposeTask(input: DecomposeInput): {
 /**
  * Activate an execution plan — sets it to 'active'.
  */
-export function activatePlan(planId: string): void {
+export async function activatePlan(planId: string): Promise<void> {
   const db = getDb();
-  db.update(executionPlans)
+  await db.update(executionPlans)
     .set({ status: "active" as const, updatedAt: nowMs() })
-    .where(eq(executionPlans.id, planId))
-    .run();
+    .where(eq(executionPlans.id, planId));
 }
 
 /**
  * Get execution plan by ID.
  */
-export function getPlan(planId: string): ExecutionPlanRecord | null {
+export async function getPlan(planId: string): Promise<ExecutionPlanRecord | null> {
   const db = getDb();
-  const row = db
+  const row = (await db
     .select()
     .from(executionPlans)
     .where(eq(executionPlans.id, planId))
-    .get();
+    .limit(1))[0];
 
   if (!row) return null;
 
@@ -156,15 +154,15 @@ export function getPlan(planId: string): ExecutionPlanRecord | null {
 /**
  * Get execution plan for a root task.
  */
-export function getPlanByRootTask(
+export async function getPlanByRootTask(
   rootTaskId: string
-): ExecutionPlanRecord | null {
+): Promise<ExecutionPlanRecord | null> {
   const db = getDb();
-  const row = db
+  const row = (await db
     .select()
     .from(executionPlans)
     .where(eq(executionPlans.rootTaskId, rootTaskId))
-    .get();
+    .limit(1))[0];
 
   if (!row) return null;
 
@@ -179,13 +177,12 @@ export function getPlanByRootTask(
 /**
  * Update plan status.
  */
-export function updatePlanStatus(
+export async function updatePlanStatus(
   planId: string,
   status: ExecutionPlanRecord["status"]
-): void {
+): Promise<void> {
   const db = getDb();
-  db.update(executionPlans)
+  await db.update(executionPlans)
     .set({ status, updatedAt: nowMs() })
-    .where(eq(executionPlans.id, planId))
-    .run();
+    .where(eq(executionPlans.id, planId));
 }

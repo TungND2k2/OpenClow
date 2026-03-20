@@ -1,34 +1,28 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
   integer,
+  bigint,
   real,
+  jsonb,
   uniqueIndex,
   index,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { tasks } from "./tasks.js";
 
 // ============================================================
 // knowledge_entries
 // ============================================================
-export const knowledgeEntries = sqliteTable(
+export const knowledgeEntries = pgTable(
   "knowledge_entries",
   {
     id: text("id").primaryKey(),
-    type: text("type", {
-      enum: [
-        "lesson_learned",
-        "best_practice",
-        "anti_pattern",
-        "domain_knowledge",
-        "procedure",
-      ],
-    }).notNull(),
+    type: text("type").notNull(),
     title: text("title").notNull(),
     content: text("content").notNull(),
     domain: text("domain").notNull(),
-    tags: text("tags", { mode: "json" }).notNull().default("[]"),
+    tags: jsonb("tags").notNull().default([]),
     sourceTaskId: text("source_task_id").references(() => tasks.id),
     sourceAgentId: text("source_agent_id")
       .notNull()
@@ -39,16 +33,14 @@ export const knowledgeEntries = sqliteTable(
     usageCount: integer("usage_count").notNull().default(0),
     upvotes: integer("upvotes").notNull().default(0),
     downvotes: integer("downvotes").notNull().default(0),
-    outcome: text("outcome", {
-      enum: ["success", "failure", "neutral"],
-    }),
-    contextSnapshot: text("context_snapshot", { mode: "json" }),
+    outcome: text("outcome"),
+    contextSnapshot: jsonb("context_snapshot"),
     supersededById: text("superseded_by_id").references(
       (): any => knowledgeEntries.id
     ),
-    expiresAt: integer("expires_at"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    expiresAt: bigint("expires_at", { mode: "number" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_knowledge_domain").on(table.domain),
@@ -61,7 +53,7 @@ export const knowledgeEntries = sqliteTable(
 // ============================================================
 // knowledge_votes
 // ============================================================
-export const knowledgeVotes = sqliteTable(
+export const knowledgeVotes = pgTable(
   "knowledge_votes",
   {
     id: text("id").primaryKey(),
@@ -73,7 +65,7 @@ export const knowledgeVotes = sqliteTable(
       .references(() => agents.id),
     vote: integer("vote").notNull(),
     comment: text("comment"),
-    createdAt: integer("created_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (table) => [
     uniqueIndex("idx_knowledge_votes_unique").on(
@@ -86,7 +78,7 @@ export const knowledgeVotes = sqliteTable(
 // ============================================================
 // knowledge_applications
 // ============================================================
-export const knowledgeApplications = sqliteTable(
+export const knowledgeApplications = pgTable(
   "knowledge_applications",
   {
     id: text("id").primaryKey(),
@@ -100,7 +92,7 @@ export const knowledgeApplications = sqliteTable(
       .notNull()
       .references(() => agents.id),
     wasHelpful: integer("was_helpful"),
-    createdAt: integer("created_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_knowledge_apps_knowledge").on(table.knowledgeId),

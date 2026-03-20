@@ -38,10 +38,9 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
 
   switch (tool) {
     case "list_workflows": {
-      return db.select({ id: workflowTemplates.id, name: workflowTemplates.name, description: workflowTemplates.description, domain: workflowTemplates.domain })
+      return await db.select({ id: workflowTemplates.id, name: workflowTemplates.name, description: workflowTemplates.description, domain: workflowTemplates.domain })
         .from(workflowTemplates)
-        .where(and(eq(workflowTemplates.tenantId, tenantId), eq(workflowTemplates.status, "active")))
-        .all();
+        .where(and(eq(workflowTemplates.tenantId, tenantId), eq(workflowTemplates.status, "active")));
     }
 
     case "create_workflow": {
@@ -50,43 +49,43 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
         id: s.id ?? `step_${i + 1}`, name: s.name, type: s.type ?? "form",
         next_stage_id: s.next_stage_id ?? (i < (args.stages as any[]).length - 1 ? (args.stages as any[])[i + 1]?.id ?? `step_${i + 2}` : undefined),
       }));
-      db.insert(workflowTemplates).values({
+      await db.insert(workflowTemplates).values({
         id, tenantId, name: args.name as string, description: (args.description as string) ?? null,
         domain: (args.domain as string) ?? null, version: 1, stages: JSON.stringify(stages),
         status: "active", createdAt: now, updatedAt: now,
-      }).run();
+      });
       return { id, name: args.name, stageCount: stages.length };
     }
 
     case "create_form": {
       const id = newId();
-      db.insert(formTemplates).values({
+      await db.insert(formTemplates).values({
         id, tenantId, name: args.name as string,
         schema: JSON.stringify({ fields: args.fields ?? [] }),
         version: 1, status: "active", createdAt: now, updatedAt: now,
-      }).run();
+      });
       return { id, name: args.name };
     }
 
     case "create_rule": {
       const id = newId();
-      db.insert(businessRules).values({
+      await db.insert(businessRules).values({
         id, tenantId, name: args.name as string, description: (args.description as string) ?? null,
         domain: (args.domain as string) ?? null, ruleType: (args.rule_type as any) ?? "validation",
         conditions: JSON.stringify(args.conditions ?? {}), actions: JSON.stringify(args.actions ?? []),
         priority: (args.priority as number) ?? 0, status: "active", createdAt: now, updatedAt: now,
-      }).run();
+      });
       return { id, name: args.name };
     }
 
     case "save_tutorial": {
       const commander = getCommander();
-      storeKnowledge({
+      await storeKnowledge({
         type: "procedure", title: args.title as string, content: args.content as string,
         domain: (args.domain as string) ?? "general", tags: ["tutorial", (args.target_role as string) ?? "general"],
         sourceAgentId: commander?.agent.id ?? "system", scope: `domain:${(args.target_role as string) ?? "general"}`,
       });
-      notebookWrite({
+      await notebookWrite({
         namespace: `tutorial:${tenantId}`, key: (args.title as string).toLowerCase().replace(/\s+/g, "-"),
         value: args.content as string, contentType: "text/markdown",
       });
@@ -95,7 +94,7 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
 
     case "save_knowledge": {
       const commander = getCommander();
-      const entry = storeKnowledge({
+      const entry = await storeKnowledge({
         type: (args.type as any) ?? "domain_knowledge", title: args.title as string,
         content: args.content as string, domain: (args.domain as string) ?? "general",
         tags: (args.tags as string[]) ?? [], sourceAgentId: commander?.agent.id ?? "system",
@@ -104,12 +103,12 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
     }
 
     case "list_tutorials": {
-      return retrieveKnowledge({ tags: ["tutorial"], capabilities: [], domain: (args.domain as string) ?? "general", limit: 10 })
+      return (await retrieveKnowledge({ tags: ["tutorial"], capabilities: [], domain: (args.domain as string) ?? "general", limit: 10 }))
         .map(r => ({ title: r.title, domain: r.domain, content: r.content.substring(0, 200) + "..." }));
     }
 
     case "start_workflow_instance": {
-      const instance = startWorkflow({
+      const instance = await startWorkflow({
         templateId: args.template_id as string, tenantId,
         initiatedBy: (args.initiated_by as string) ?? "telegram", channel: "telegram",
       });
@@ -117,22 +116,22 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
     }
 
     case "get_dashboard": {
-      const dash = getDashboard();
+      const dash = await getDashboard();
       const queueMetrics = getQueueMetrics?.() ?? null;
       return { ...dash, queue: queueMetrics };
     }
 
     case "search_knowledge": {
-      return retrieveKnowledge({
+      return (await retrieveKnowledge({
         tags: (args.tags as string[]) ?? [], capabilities: [],
         domain: (args.domain as string) ?? "general", limit: 5,
-      }).map(r => ({ title: r.title, content: r.content.substring(0, 200), score: r.matchScore }));
+      })).map(r => ({ title: r.title, content: r.content.substring(0, 200), score: r.matchScore }));
     }
 
     case "read_file_content": {
       let fileId = args.file_id as string;
       if (fileId && !fileId.startsWith("01")) {
-        const allFiles = listFiles(tenantId, 50);
+        const allFiles = await listFiles(tenantId, 50);
         const match = allFiles.find((f: any) => f.fileName.toLowerCase().includes(fileId.toLowerCase()));
         if (match) fileId = match.id;
       }
@@ -142,39 +141,39 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
     }
 
     case "send_file": {
-      const file = getFile(args.file_id as string);
+      const file = await getFile(args.file_id as string);
       if (!file) return { error: "File not found" };
       return { __send_file__: true, url: file.s3Url, fileName: file.fileName, mimeType: file.mimeType };
     }
 
-    case "list_files": return listFiles(tenantId, (args.limit as number) ?? 20);
-    case "get_file": return getFile(args.file_id as string);
+    case "list_files": return await listFiles(tenantId, (args.limit as number) ?? 20);
+    case "get_file": return await getFile(args.file_id as string);
 
     case "set_user_role": {
-      const existing = db.select({ id: tenantUsers.id }).from(tenantUsers)
-        .where(and(eq(tenantUsers.tenantId, tenantId), eq(tenantUsers.channel, args.channel as string), eq(tenantUsers.channelUserId, args.channel_user_id as string))).get();
+      const existing = (await db.select({ id: tenantUsers.id }).from(tenantUsers)
+        .where(and(eq(tenantUsers.tenantId, tenantId), eq(tenantUsers.channel, args.channel as string), eq(tenantUsers.channelUserId, args.channel_user_id as string))).limit(1))[0];
       if (existing) {
-        db.update(tenantUsers).set({ role: args.role as any, displayName: (args.display_name as string) ?? undefined, updatedAt: now })
-          .where(eq(tenantUsers.id, existing.id)).run();
+        await db.update(tenantUsers).set({ role: args.role as any, displayName: (args.display_name as string) ?? undefined, updatedAt: now })
+          .where(eq(tenantUsers.id, existing.id));
       } else {
-        db.insert(tenantUsers).values({
+        await db.insert(tenantUsers).values({
           id: newId(), tenantId, channel: args.channel as string, channelUserId: args.channel_user_id as string,
-          displayName: (args.display_name as string) ?? null, role: (args.role as any) ?? "user", isActive: 1, createdAt: now, updatedAt: now,
-        }).run();
+          displayName: (args.display_name as string) ?? null, role: (args.role as any) ?? "user", isActive: true, createdAt: now, updatedAt: now,
+        });
       }
       return { success: true, role: args.role };
     }
 
     case "list_users": {
-      return db.select({ channelUserId: tenantUsers.channelUserId, channel: tenantUsers.channel, displayName: tenantUsers.displayName, role: tenantUsers.role })
-        .from(tenantUsers).where(eq(tenantUsers.tenantId, tenantId)).all();
+      return await db.select({ channelUserId: tenantUsers.channelUserId, channel: tenantUsers.channel, displayName: tenantUsers.displayName, role: tenantUsers.role })
+        .from(tenantUsers).where(eq(tenantUsers.tenantId, tenantId));
     }
 
     // ── AI Config Tools (admin edits bot behavior via chat) ──
 
     case "update_ai_config": {
       const { tenants } = await import("../db/schema.js");
-      const tenant = db.select().from(tenants).where(eq(tenants.id, tenantId)).get();
+      const tenant = (await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1))[0];
       if (!tenant) return { error: "Tenant not found" };
       const current = (tenant.aiConfig ?? {}) as Record<string, unknown>;
 
@@ -194,13 +193,13 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
         }
       }
 
-      db.update(tenants).set({ aiConfig: current, updatedAt: nowMs() }).where(eq(tenants.id, tenantId)).run();
+      await db.update(tenants).set({ aiConfig: current, updatedAt: nowMs() }).where(eq(tenants.id, tenantId));
       return { success: true, updated_keys: Object.keys(updates), config: current };
     }
 
     case "get_ai_config": {
       const { tenants: t } = await import("../db/schema.js");
-      const tn = db.select().from(t).where(eq(t.id, tenantId)).get();
+      const tn = (await db.select().from(t).where(eq(t.id, tenantId)).limit(1))[0];
       return tn?.aiConfig ?? {};
     }
 
@@ -208,7 +207,7 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
 
     case "create_agent_template": {
       const { createTemplate: ct } = await import("../modules/agents/template.service.js");
-      const tmpl = ct({
+      const tmpl = await ct({
         name: args.name as string,
         role: args.role as any,
         systemPrompt: args.system_prompt as string,
@@ -223,13 +222,13 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
 
     case "list_agent_templates": {
       const { listTemplates: lt } = await import("../modules/agents/template.service.js");
-      return lt({ role: args.role as string, status: (args.status as string) ?? "active" })
+      return (await lt({ role: args.role as string, status: (args.status as string) ?? "active" }))
         .map(t => ({ id: t.id, name: t.name, role: t.role, engine: t.engine, autoSpawn: t.autoSpawn, status: t.status }));
     }
 
     case "spawn_agent": {
       const { agentPool: pool } = await import("../modules/agents/agent-pool.js");
-      const spawned = pool.spawnAgent(
+      const spawned = await pool.spawnAgent(
         args.template_id as string,
         args.template_name as string,
         args.parent_agent_id as string,
@@ -240,13 +239,13 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
 
     case "kill_agent": {
       const { agentPool: pool } = await import("../modules/agents/agent-pool.js");
-      pool.killAgent(args.agent_id as string);
+      await pool.killAgent(args.agent_id as string);
       return { killed: true, agent_id: args.agent_id };
     }
 
     case "list_agents": {
       const { listAgents: la } = await import("../modules/agents/agent.service.js");
-      return la()
+      return (await la())
         .filter(a => {
           if (args.role && a.role !== args.role) return false;
           if (args.status && a.status !== args.status) return false;
@@ -291,19 +290,19 @@ export async function processWithCommander(input: {
   }
 
   const commanderAgentId = commander.agent.id;
-  heartbeat(commanderAgentId);
+  await heartbeat(commanderAgentId);
 
   // ── Step 1: Create Task (valid FK to Commander) ──────────
   let task;
   try {
-    task = createTask({
+    task = await createTask({
       title: `Chat: ${input.userMessage.substring(0, 50)}`,
       description: input.userMessage,
       tags: ["chat", "telegram"],
       createdByAgentId: commanderAgentId,
     });
-    assignTask(task.id, commanderAgentId, commanderAgentId);
-    startTask(task.id, commanderAgentId);
+    await assignTask(task.id, commanderAgentId, commanderAgentId);
+    await startTask(task.id, commanderAgentId);
     console.error(`[Pipeline] Task: ${task.id} → Commander (${commander.agent.name})`);
   } catch (taskErr: any) {
     console.error(`[Pipeline] Task creation skipped: ${taskErr.message}`);
@@ -313,7 +312,7 @@ export async function processWithCommander(input: {
   // ── Step 2: Query Knowledge Base ─────────────────────────
   await input.onProgress?.("🔍 Đang tìm kiếm kiến thức...");
   const keywords = input.userMessage.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-  const knowledge = retrieveKnowledge({
+  const knowledge = await retrieveKnowledge({
     tags: keywords,
     capabilities: [],
     domain: "general",
@@ -330,7 +329,7 @@ export async function processWithCommander(input: {
   }
 
   // ── Step 3: Build context ────────────────────────────────
-  const uploadedFiles = listFiles(input.tenantId, 20);
+  const uploadedFiles = await listFiles(input.tenantId, 20);
   const fileContext = uploadedFiles.length > 0
     ? `\n\nFILES ĐÃ UPLOAD:\n${uploadedFiles.map((f: any) => `• ${f.fileName} (ID: ${f.id})`).join("\n")}\nKhi user hỏi về file/cẩm nang/tài liệu → gọi read_file_content(file_id) để đọc.`
     : "";
@@ -379,16 +378,16 @@ export async function processWithCommander(input: {
     // ── Step 5: Complete task + update performance ──────────
     if (task) {
       try {
-        completeTask(task.id, commanderAgentId, result.text.substring(0, 200));
+        await completeTask(task.id, commanderAgentId, result.text.substring(0, 200));
       } catch {}
     }
-    updatePerformance(commanderAgentId, true);
+    await updatePerformance(commanderAgentId, true);
 
     // ── Step 6: Self-learning ──────────────────────────────
     if (result.toolCalls.length > 0) {
       const toolNames = result.toolCalls.map(t => t.tool).join(", ");
       try {
-        storeKnowledge({
+        await storeKnowledge({
           type: "best_practice",
           title: `Q: ${input.userMessage.substring(0, 80)}`,
           content: `User: "${input.userMessage}"\nTools: ${toolNames}\nAnswer: ${result.text.substring(0, 500)}`,
@@ -405,7 +404,7 @@ export async function processWithCommander(input: {
     }
 
     // ── Step 7: Audit ──────────────────────────────────────
-    recordDecision({
+    await recordDecision({
       agentId: commanderAgentId,
       decisionType: "assign",
       taskId: task?.id,
@@ -419,12 +418,12 @@ export async function processWithCommander(input: {
   } catch (e: any) {
     // ── Error handling ──────────────────────────────────────
     if (task) {
-      try { failTask(task.id, commanderAgentId, e.message); } catch {}
+      try { await failTask(task.id, commanderAgentId, e.message); } catch {}
     }
-    updatePerformance(commanderAgentId, false);
+    await updatePerformance(commanderAgentId, false);
 
     try {
-      storeKnowledge({
+      await storeKnowledge({
         type: "anti_pattern",
         title: `Failed: ${input.userMessage.substring(0, 80)}`,
         content: `Error: ${e.message}`,

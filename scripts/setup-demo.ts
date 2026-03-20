@@ -6,7 +6,7 @@ import "dotenv/config";
 import { loadConfig } from "../src/config.js";
 loadConfig();
 import { runMigrations } from "../src/db/migrate.js";
-runMigrations();
+await runMigrations();
 
 import { createTenant } from "../src/modules/tenants/tenant.service.js";
 import { getDb } from "../src/db/connection.js";
@@ -20,7 +20,7 @@ const now = nowMs();
 const db = getDb();
 
 // 1. Create tenant with AI config (prompt, tools, rules — all in DB, not hardcoded)
-const tenant = createTenant({
+const tenant = await createTenant({
   name: "Demo Corp",
   config: { currency: "VND", timezone: "Asia/Ho_Chi_Minh" },
   aiConfig: {
@@ -94,7 +94,7 @@ console.log(`✅ Tenant: ${tenant.id} (${tenant.name})`);
 
 // 2. Create order form
 const formId = newId();
-db.insert(formTemplates).values({
+await db.insert(formTemplates).values({
   id: formId,
   tenantId: tenant.id,
   name: "Sales Order Form",
@@ -112,12 +112,12 @@ db.insert(formTemplates).values({
   status: "active",
   createdAt: now,
   updatedAt: now,
-}).run();
+});
 console.log(`✅ Form: ${formId} (Sales Order Form)`);
 
 // 3. Create approval rule
 const ruleId = newId();
-db.insert(businessRules).values({
+await db.insert(businessRules).values({
   id: ruleId,
   tenantId: tenant.id,
   name: "Đơn hàng > 5M cần Manager duyệt",
@@ -135,12 +135,12 @@ db.insert(businessRules).values({
   status: "active",
   createdAt: now,
   updatedAt: now,
-}).run();
+});
 console.log(`✅ Rule: ${ruleId} (auto-escalate > 5M)`);
 
 // 4. Create workflow template
 const tmplId = newId();
-db.insert(workflowTemplates).values({
+await db.insert(workflowTemplates).values({
   id: tmplId,
   tenantId: tenant.id,
   name: "Tạo Đơn Hàng",
@@ -181,7 +181,7 @@ db.insert(workflowTemplates).values({
   status: "active",
   createdAt: now,
   updatedAt: now,
-}).run();
+});
 console.log(`✅ Workflow: ${tmplId} (Tạo Đơn Hàng)`);
 
 // 5. Agents — created automatically by agent-pool on startup
@@ -190,17 +190,17 @@ console.log(`⏭️  Agents will be created by agent-pool on startup`);
 // 6. Create admin user in DB (Telegram ID from env or arg)
 const adminTelegramId = process.argv[2] ?? "1963992425";
 const adminUserId = newId();
-db.insert(tenantUsers).values({
+await db.insert(tenantUsers).values({
   id: adminUserId,
   tenantId: tenant.id,
   channel: "telegram",
   channelUserId: adminTelegramId,
   displayName: "Admin",
   role: "admin",
-  isActive: 1,
+  isActive: true,
   createdAt: now,
   updatedAt: now,
-}).run();
+});
 console.log(`✅ Admin user: telegram:${adminTelegramId} → role:admin`);
 
 // Print .env snippet

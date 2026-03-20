@@ -32,7 +32,7 @@ function assertTransition(current: TaskStatus, next: TaskStatus): void {
 
 // ── CRUD ─────────────────────────────────────────────────────
 
-export function createTask(input: CreateTaskInput): TaskRecord {
+export async function createTask(input: CreateTaskInput): Promise<TaskRecord> {
   const db = getDb();
   const now = nowMs();
   const id = newId();
@@ -40,11 +40,11 @@ export function createTask(input: CreateTaskInput): TaskRecord {
   // Calculate depth from parent
   let depth = 0;
   if (input.parentTaskId) {
-    const parent = db
+    const parent = (await db
       .select({ depth: tasks.depth, maxDepth: tasks.maxDepth })
       .from(tasks)
       .where(eq(tasks.id, input.parentTaskId))
-      .get();
+      .limit(1))[0];
     if (!parent) throw new Error(`Parent task ${input.parentTaskId} not found`);
     depth = parent.depth + 1;
     if (depth > parent.maxDepth) {
@@ -86,25 +86,25 @@ export function createTask(input: CreateTaskInput): TaskRecord {
     deadline: input.deadline ?? null,
   };
 
-  db.insert(tasks).values(record).run();
+  await db.insert(tasks).values(record);
 
   return toRecord({ ...record, dependencyIds: [], requiredCapabilities: input.requiredCapabilities ?? [], tags: input.tags ?? [] });
 }
 
-export function getTask(taskId: string): TaskRecord | null {
+export async function getTask(taskId: string): Promise<TaskRecord | null> {
   const db = getDb();
-  const row = db.select().from(tasks).where(eq(tasks.id, taskId)).get();
+  const row = (await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1))[0];
   return row ? toRecord(row) : null;
 }
 
-export function listTasks(filters?: {
+export async function listTasks(filters?: {
   status?: TaskStatus;
   assignedTo?: string;
   priorityMin?: number;
   tags?: string[];
   parentTaskId?: string;
   limit?: number;
-}): TaskRecord[] {
+}): Promise<TaskRecord[]> {
   const db = getDb();
   const conditions: any[] = [];
 
@@ -121,14 +121,12 @@ export function listTasks(filters?: {
     conditions.push(eq(tasks.parentTaskId, filters.parentTaskId));
   }
 
-  let query = db
+  const rows = await db
     .select()
     .from(tasks)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(tasks.priority), desc(tasks.urgency))
     .limit(filters?.limit ?? 100);
-
-  const rows = query.all();
 
   let result = rows;
   if (filters?.tags && filters.tags.length > 0) {
@@ -147,17 +145,17 @@ export function listTasks(filters?: {
  * Agent claims an unassigned pending task.
  * Uses optimistic concurrency: only updates if status is still 'pending'.
  */
-export function claimTask(taskId: string, agentId: string): TaskRecord {
+export async function claimTask(taskId: string, agentId: string): Promise<TaskRecord> {
   const db = getDb();
   const now = nowMs();
 
-  const task = getTask(taskId);
+  const task = await getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   if (task.status !== "pending") {
     throw new Error(`Task ${taskId} is ${task.status}, cannot claim`);
   }
 
-  const result = db
+  const result = await db
     .update(tasks)
     .set({
       status: "assigned" as const,
@@ -165,167 +163,160 @@ export function claimTask(taskId: string, agentId: string): TaskRecord {
       assignedAt: now,
     })
     .where(and(eq(tasks.id, taskId), eq(tasks.status, "pending")))
-    .run();
+    .returning({ id: tasks.id });
 
-  if (result.changes === 0) {
+  if (result.length === 0) {
     throw new Error(`Task ${taskId} was claimed by another agent`);
   }
 
-  return getTask(taskId)!;
+  return (await getTask(taskId))!;
 }
 
 /**
  * Assign task to a specific agent (by commander/supervisor).
  */
-export function assignTask(
+export async function assignTask(
   taskId: string,
   agentId: string,
   delegatedByAgentId: string
-): TaskRecord {
+): Promise<TaskRecord> {
   const db = getDb();
   const now = nowMs();
 
-  const task = getTask(taskId);
+  const task = await getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   assertTransition(task.status, "assigned");
 
-  db.update(tasks)
+  await db.update(tasks)
     .set({
       status: "assigned" as const,
       assignedAgentId: agentId,
       delegatedByAgentId,
       assignedAt: now,
     })
-    .where(eq(tasks.id, taskId))
-    .run();
+    .where(eq(tasks.id, taskId));
 
-  return getTask(taskId)!;
+  return (await getTask(taskId))!;
 }
 
 /**
  * Start working on an assigned task.
  */
-export function startTask(taskId: string, agentId: string): TaskRecord {
+export async function startTask(taskId: string, agentId: string): Promise<TaskRecord> {
   const db = getDb();
   const now = nowMs();
 
-  const task = getTask(taskId);
+  const task = await getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   if (task.assignedAgentId !== agentId) {
     throw new Error(`Task ${taskId} is not assigned to agent ${agentId}`);
   }
   assertTransition(task.status, "in_progress");
 
-  db.update(tasks)
+  await db.update(tasks)
     .set({ status: "in_progress" as const, startedAt: now })
-    .where(eq(tasks.id, taskId))
-    .run();
+    .where(eq(tasks.id, taskId));
 
-  return getTask(taskId)!;
+  return (await getTask(taskId))!;
 }
 
 /**
  * Complete a task with result.
  */
-export function completeTask(
+export async function completeTask(
   taskId: string,
   agentId: string,
   result: string
-): TaskRecord {
+): Promise<TaskRecord> {
   const db = getDb();
   const now = nowMs();
 
-  const task = getTask(taskId);
+  const task = await getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   if (task.assignedAgentId !== agentId) {
     throw new Error(`Task ${taskId} is not assigned to agent ${agentId}`);
   }
   assertTransition(task.status, "completed");
 
-  db.update(tasks)
+  await db.update(tasks)
     .set({
       status: "completed" as const,
       result,
       completedAt: now,
     })
-    .where(eq(tasks.id, taskId))
-    .run();
+    .where(eq(tasks.id, taskId));
 
   // Satisfy dependencies that depend on this task
-  db.update(taskDependencies)
+  await db.update(taskDependencies)
     .set({ status: "satisfied" as const })
-    .where(eq(taskDependencies.dependsOnId, taskId))
-    .run();
+    .where(eq(taskDependencies.dependsOnId, taskId));
 
-  return getTask(taskId)!;
+  return (await getTask(taskId))!;
 }
 
 /**
  * Fail a task with error.
  */
-export function failTask(
+export async function failTask(
   taskId: string,
   agentId: string,
   error: string
-): TaskRecord {
+): Promise<TaskRecord> {
   const db = getDb();
   const now = nowMs();
 
-  const task = getTask(taskId);
+  const task = await getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   if (task.assignedAgentId !== agentId) {
     throw new Error(`Task ${taskId} is not assigned to agent ${agentId}`);
   }
   assertTransition(task.status, "failed");
 
-  db.update(tasks)
+  await db.update(tasks)
     .set({
       status: "failed" as const,
       error,
       completedAt: now,
     })
-    .where(eq(tasks.id, taskId))
-    .run();
+    .where(eq(tasks.id, taskId));
 
   // Mark dependencies as failed
-  db.update(taskDependencies)
+  await db.update(taskDependencies)
     .set({ status: "failed" as const })
-    .where(eq(taskDependencies.dependsOnId, taskId))
-    .run();
+    .where(eq(taskDependencies.dependsOnId, taskId));
 
-  return getTask(taskId)!;
+  return (await getTask(taskId))!;
 }
 
 /**
  * Cancel a task.
  */
-export function cancelTask(taskId: string, reason?: string): TaskRecord {
+export async function cancelTask(taskId: string, reason?: string): Promise<TaskRecord> {
   const db = getDb();
   const now = nowMs();
 
-  const task = getTask(taskId);
+  const task = await getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   assertTransition(task.status, "cancelled");
 
-  db.update(tasks)
+  await db.update(tasks)
     .set({
       status: "cancelled" as const,
       error: reason ?? "cancelled",
       completedAt: now,
     })
-    .where(eq(tasks.id, taskId))
-    .run();
+    .where(eq(tasks.id, taskId));
 
-  return getTask(taskId)!;
+  return (await getTask(taskId))!;
 }
 
 /**
  * Retry a failed task — resets to pending with incremented retry count.
  */
-export function retryTask(taskId: string): TaskRecord {
+export async function retryTask(taskId: string): Promise<TaskRecord> {
   const db = getDb();
 
-  const task = getTask(taskId);
+  const task = await getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   if (task.status !== "failed") {
     throw new Error(`Task ${taskId} is ${task.status}, only failed tasks can be retried`);
@@ -336,7 +327,7 @@ export function retryTask(taskId: string): TaskRecord {
     );
   }
 
-  db.update(tasks)
+  await db.update(tasks)
     .set({
       status: "pending" as const,
       assignedAgentId: null,
@@ -347,46 +338,43 @@ export function retryTask(taskId: string): TaskRecord {
       startedAt: null,
       completedAt: null,
     })
-    .where(eq(tasks.id, taskId))
-    .run();
+    .where(eq(tasks.id, taskId));
 
-  return getTask(taskId)!;
+  return (await getTask(taskId))!;
 }
 
 /**
  * Mark task as delegated (has subtasks).
  */
-export function delegateTask(taskId: string): TaskRecord {
+export async function delegateTask(taskId: string): Promise<TaskRecord> {
   const db = getDb();
 
-  const task = getTask(taskId);
+  const task = await getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   assertTransition(task.status, "delegated");
 
-  db.update(tasks)
+  await db.update(tasks)
     .set({ status: "delegated" as const })
-    .where(eq(tasks.id, taskId))
-    .run();
+    .where(eq(tasks.id, taskId));
 
-  return getTask(taskId)!;
+  return (await getTask(taskId))!;
 }
 
 /**
  * Mark task as blocked.
  */
-export function blockTask(taskId: string): TaskRecord {
+export async function blockTask(taskId: string): Promise<TaskRecord> {
   const db = getDb();
 
-  const task = getTask(taskId);
+  const task = await getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   assertTransition(task.status, "blocked");
 
-  db.update(tasks)
+  await db.update(tasks)
     .set({ status: "blocked" as const })
-    .where(eq(tasks.id, taskId))
-    .run();
+    .where(eq(tasks.id, taskId));
 
-  return getTask(taskId)!;
+  return (await getTask(taskId))!;
 }
 
 // ── Dependencies ─────────────────────────────────────────────
@@ -394,19 +382,18 @@ export function blockTask(taskId: string): TaskRecord {
 /**
  * Add a dependency: taskId depends on dependsOnId.
  */
-export function addDependency(taskId: string, dependsOnId: string): void {
+export async function addDependency(taskId: string, dependsOnId: string): Promise<void> {
   const db = getDb();
-  db.insert(taskDependencies)
-    .values({ taskId, dependsOnId, status: "pending" })
-    .run();
+  await db.insert(taskDependencies)
+    .values({ taskId, dependsOnId, status: "pending" });
 }
 
 /**
  * Check if all dependencies of a task are satisfied.
  */
-export function areDependenciesSatisfied(taskId: string): boolean {
+export async function areDependenciesSatisfied(taskId: string): Promise<boolean> {
   const db = getDb();
-  const pending = db
+  const pending = (await db
     .select({ count: sql<number>`count(*)` })
     .from(taskDependencies)
     .where(
@@ -415,19 +402,18 @@ export function areDependenciesSatisfied(taskId: string): boolean {
         sql`${taskDependencies.status} != 'satisfied'`
       )
     )
-    .get();
+    .limit(1))[0];
   return (pending?.count ?? 0) === 0;
 }
 
 /**
  * Get subtasks of a parent task.
  */
-export function getSubtasks(parentTaskId: string): TaskRecord[] {
+export async function getSubtasks(parentTaskId: string): Promise<TaskRecord[]> {
   const db = getDb();
-  const rows = db
+  const rows = await db
     .select()
     .from(tasks)
-    .where(eq(tasks.parentTaskId, parentTaskId))
-    .all();
+    .where(eq(tasks.parentTaskId, parentTaskId));
   return rows.map(toRecord);
 }

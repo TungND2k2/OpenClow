@@ -24,7 +24,7 @@ export function registerWorkflowTools(server: McpServer): void {
     const db = getDb();
     const now = nowMs();
     const id = newId();
-    db.insert(workflowTemplates).values({
+    await db.insert(workflowTemplates).values({
       id,
       tenantId: params.tenant_id,
       name: params.name,
@@ -36,7 +36,7 @@ export function registerWorkflowTools(server: McpServer): void {
       status: "draft",
       createdAt: now,
       updatedAt: now,
-    }).run();
+    });
     return { content: [{ type: "text", text: JSON.stringify({ id, name: params.name }, null, 2) }] };
   });
 
@@ -44,7 +44,7 @@ export function registerWorkflowTools(server: McpServer): void {
     template_id: z.string(),
   }, async ({ template_id }) => {
     const db = getDb();
-    const row = db.select().from(workflowTemplates).where(eq(workflowTemplates.id, template_id)).get();
+    const row = (await db.select().from(workflowTemplates).where(eq(workflowTemplates.id, template_id)).limit(1))[0];
     if (!row) return { content: [{ type: "text", text: "Not found" }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(row, null, 2) }] };
   });
@@ -58,7 +58,7 @@ export function registerWorkflowTools(server: McpServer): void {
     const conditions: any[] = [eq(workflowTemplates.tenantId, params.tenant_id)];
     if (params.domain) conditions.push(eq(workflowTemplates.domain, params.domain));
     if (params.status) conditions.push(eq(workflowTemplates.status, params.status as any));
-    const rows = db.select().from(workflowTemplates).where(and(...conditions)).all();
+    const rows = await db.select().from(workflowTemplates).where(and(...conditions));
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   });
 
@@ -73,7 +73,7 @@ export function registerWorkflowTools(server: McpServer): void {
     if (params.stages) updates.stages = JSON.stringify(params.stages);
     if (params.status) updates.status = params.status;
     if (params.description) updates.description = params.description;
-    db.update(workflowTemplates).set(updates).where(eq(workflowTemplates.id, params.template_id)).run();
+    await db.update(workflowTemplates).set(updates).where(eq(workflowTemplates.id, params.template_id));
     return { content: [{ type: "text", text: "OK" }] };
   });
 
@@ -89,13 +89,13 @@ export function registerWorkflowTools(server: McpServer): void {
     const now = nowMs();
     const id = newId();
 
-    const template = db.select().from(workflowTemplates).where(eq(workflowTemplates.id, params.template_id)).get();
+    const template = (await db.select().from(workflowTemplates).where(eq(workflowTemplates.id, params.template_id)).limit(1))[0];
     if (!template) return { content: [{ type: "text", text: "Template not found" }], isError: true };
 
     const stages = template.stages as unknown as any[];
     const firstStageId = stages.length > 0 ? stages[0].id : null;
 
-    db.insert(workflowInstances).values({
+    await db.insert(workflowInstances).values({
       id,
       templateId: params.template_id,
       tenantId: params.tenant_id,
@@ -108,7 +108,7 @@ export function registerWorkflowTools(server: McpServer): void {
       history: JSON.stringify([{ stage: firstStageId, action: "started", at: now }]),
       createdAt: now,
       updatedAt: now,
-    }).run();
+    });
     return { content: [{ type: "text", text: JSON.stringify({ id, currentStageId: firstStageId }, null, 2) }] };
   });
 
@@ -116,7 +116,7 @@ export function registerWorkflowTools(server: McpServer): void {
     instance_id: z.string(),
   }, async ({ instance_id }) => {
     const db = getDb();
-    const row = db.select().from(workflowInstances).where(eq(workflowInstances.id, instance_id)).get();
+    const row = (await db.select().from(workflowInstances).where(eq(workflowInstances.id, instance_id)).limit(1))[0];
     if (!row) return { content: [{ type: "text", text: "Not found" }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(row, null, 2) }] };
   });
@@ -127,15 +127,15 @@ export function registerWorkflowTools(server: McpServer): void {
   }, async ({ instance_id, form_data }) => {
     const db = getDb();
     const now = nowMs();
-    const instance = db.select().from(workflowInstances).where(eq(workflowInstances.id, instance_id)).get();
+    const instance = (await db.select().from(workflowInstances).where(eq(workflowInstances.id, instance_id)).limit(1))[0];
     if (!instance) return { content: [{ type: "text", text: "Not found" }], isError: true };
 
     const existing = (instance.formData as any) ?? {};
     const merged = { ...existing, ...form_data };
-    db.update(workflowInstances).set({
+    await db.update(workflowInstances).set({
       formData: JSON.stringify(merged),
       updatedAt: now,
-    }).where(eq(workflowInstances.id, instance_id)).run();
+    }).where(eq(workflowInstances.id, instance_id));
     return { content: [{ type: "text", text: JSON.stringify({ formData: merged }, null, 2) }] };
   });
 
@@ -147,11 +147,11 @@ export function registerWorkflowTools(server: McpServer): void {
   }, async (params) => {
     const db = getDb();
     const now = nowMs();
-    db.update(workflowApprovals).set({
+    await db.update(workflowApprovals).set({
       status: params.decision,
       decisionReason: params.reason ?? null,
       decidedAt: now,
-    }).where(eq(workflowApprovals.id, params.approval_id)).run();
+    }).where(eq(workflowApprovals.id, params.approval_id));
     return { content: [{ type: "text", text: `${params.decision}` }] };
   });
 
@@ -165,10 +165,10 @@ export function registerWorkflowTools(server: McpServer): void {
     if (params.tenant_id) conditions.push(eq(workflowInstances.tenantId, params.tenant_id));
     if (params.status) conditions.push(eq(workflowInstances.status, params.status as any));
     if (params.template_id) conditions.push(eq(workflowInstances.templateId, params.template_id));
-    const rows = db.select().from(workflowInstances)
+    const rows = await db.select().from(workflowInstances)
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(workflowInstances.createdAt))
-      .limit(50).all();
+      .limit(50);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   });
 }

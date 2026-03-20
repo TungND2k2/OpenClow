@@ -148,16 +148,16 @@ interface UserInfo {
   displayName: string | null;
 }
 
-function getUserInfo(telegramUserId: string, tenantId: string): UserInfo {
+async function getUserInfo(telegramUserId: string, tenantId: string): Promise<UserInfo> {
   const db = getDb();
-  const row = db.select({ role: tenantUsers.role, displayName: tenantUsers.displayName })
+  const row = (await db.select({ role: tenantUsers.role, displayName: tenantUsers.displayName })
     .from(tenantUsers)
     .where(and(
       eq(tenantUsers.tenantId, tenantId),
       eq(tenantUsers.channel, "telegram"),
       eq(tenantUsers.channelUserId, telegramUserId),
-      eq(tenantUsers.isActive, 1),
-    )).get();
+      eq(tenantUsers.isActive, true),
+    )).limit(1))[0];
   return { role: row?.role ?? null, displayName: row?.displayName ?? null };
 }
 
@@ -174,111 +174,105 @@ interface RegistrationState {
 
 const _registrations = new Map<string, RegistrationState>(); // key: `${tenantId}:${userId}`
 
-/** Create pending registration (isActive=0) → admin must approve */
-function createPendingUser(
+/** Create pending registration (isActive=false) → admin must approve */
+async function createPendingUser(
   telegramUserId: string, tenantId: string,
   data: { fullName: string; phone: string; position: string; telegramName: string; telegramUsername?: string }
-): string {
+): Promise<string> {
   const db = getDb();
-  const existing = db.select({ id: tenantUsers.id }).from(tenantUsers)
+  const existing = (await db.select({ id: tenantUsers.id }).from(tenantUsers)
     .where(and(
       eq(tenantUsers.tenantId, tenantId),
       eq(tenantUsers.channel, "telegram"),
       eq(tenantUsers.channelUserId, telegramUserId),
-    )).get();
+    )).limit(1))[0];
 
   const meta = JSON.stringify({ phone: data.phone, position: data.position, telegramUsername: data.telegramUsername });
   const id = existing?.id ?? newId();
 
   if (existing) {
-    db.update(tenantUsers).set({
-      displayName: data.fullName, isActive: 0, updatedAt: Date.now(),
+    await db.update(tenantUsers).set({
+      displayName: data.fullName, isActive: false, updatedAt: Date.now(),
       metadata: meta,
-    }).where(eq(tenantUsers.id, id)).run();
+    }).where(eq(tenantUsers.id, id));
   } else {
-    db.insert(tenantUsers).values({
+    await db.insert(tenantUsers).values({
       id, tenantId, channel: "telegram", channelUserId: telegramUserId,
-      displayName: data.fullName, role: "user", isActive: 0,
+      displayName: data.fullName, role: "user", isActive: false,
       metadata: meta, createdAt: Date.now(), updatedAt: Date.now(),
-    }).run();
+    });
   }
   return id;
 }
 
 /** Get all admin/manager chat IDs for notifications */
-function getAdminChatIds(tenantId: string): string[] {
+async function getAdminChatIds(tenantId: string): Promise<string[]> {
   const db = getDb();
-  const rows = db.select({ channelUserId: tenantUsers.channelUserId })
+  const rows = await db.select({ channelUserId: tenantUsers.channelUserId, role: tenantUsers.role })
     .from(tenantUsers)
     .where(and(
       eq(tenantUsers.tenantId, tenantId),
       eq(tenantUsers.channel, "telegram"),
-      eq(tenantUsers.isActive, 1),
-    )).all()
-    .filter(r => {
-      const role = db.select({ role: tenantUsers.role }).from(tenantUsers)
-        .where(and(
-          eq(tenantUsers.tenantId, tenantId),
-          eq(tenantUsers.channelUserId, r.channelUserId),
-        )).get();
-      return role?.role === "admin" || role?.role === "manager";
-    });
-  return rows.map(r => r.channelUserId);
+      eq(tenantUsers.isActive, true),
+    ));
+  return rows
+    .filter(r => r.role === "admin" || r.role === "manager")
+    .map(r => r.channelUserId);
 }
 
 /** Approve pending user */
-function approveUser(tenantId: string, channelUserId: string): boolean {
+async function approveUser(tenantId: string, channelUserId: string): Promise<boolean> {
   const db = getDb();
-  const result = db.update(tenantUsers).set({ isActive: 1, updatedAt: Date.now() })
+  const result = await db.update(tenantUsers).set({ isActive: true, updatedAt: Date.now() })
     .where(and(
       eq(tenantUsers.tenantId, tenantId),
       eq(tenantUsers.channel, "telegram"),
       eq(tenantUsers.channelUserId, channelUserId),
-    )).run();
-  return result.changes > 0;
+    )).returning({ id: tenantUsers.id });
+  return result.length > 0;
 }
 
 /** Reject pending user */
-function rejectUser(tenantId: string, channelUserId: string): boolean {
+async function rejectUser(tenantId: string, channelUserId: string): Promise<boolean> {
   const db = getDb();
-  const result = db.delete(tenantUsers)
+  const result = await db.delete(tenantUsers)
     .where(and(
       eq(tenantUsers.tenantId, tenantId),
       eq(tenantUsers.channel, "telegram"),
       eq(tenantUsers.channelUserId, channelUserId),
-      eq(tenantUsers.isActive, 0),
-    )).run();
-  return result.changes > 0;
+      eq(tenantUsers.isActive, false),
+    )).returning({ id: tenantUsers.id });
+  return result.length > 0;
 }
 
 /** List pending registrations */
-function getPendingUsers(tenantId: string): any[] {
+async function getPendingUsers(tenantId: string): Promise<any[]> {
   const db = getDb();
-  return db.select().from(tenantUsers)
+  return await db.select().from(tenantUsers)
     .where(and(
       eq(tenantUsers.tenantId, tenantId),
-      eq(tenantUsers.isActive, 0),
-    )).all();
+      eq(tenantUsers.isActive, false),
+    ));
 }
 
 /** Update display name if changed (Telegram name can change anytime) */
-function syncUserName(telegramUserId: string, tenantId: string, newName: string): void {
+async function syncUserName(telegramUserId: string, tenantId: string, newName: string): Promise<void> {
   const db = getDb();
-  db.update(tenantUsers)
+  await db.update(tenantUsers)
     .set({ displayName: newName, updatedAt: Date.now() })
     .where(and(
       eq(tenantUsers.tenantId, tenantId),
       eq(tenantUsers.channel, "telegram"),
       eq(tenantUsers.channelUserId, telegramUserId),
-    )).run();
+    ));
 }
 
 // ── Job handler — processes one message through Commander ─────
 
 async function handleJob(job: QueueJob): Promise<void> {
-  const tenant = getTenant(job.tenantId);
+  const tenant = await getTenant(job.tenantId);
 
-  const session = getOrCreateSession({
+  const session = await getOrCreateSession({
     tenantId: job.tenantId,
     channel: "telegram",
     channelUserId: job.userId,
@@ -286,7 +280,7 @@ async function handleJob(job: QueueJob): Promise<void> {
     userRole: job.userRole,
   });
 
-  appendMessage(session.id, { role: "user", content: job.text, at: Date.now() });
+  await appendMessage(session.id, { role: "user", content: job.text, at: Date.now() });
 
   // ── Send progress message immediately ──
   const progressMsgId = await sendTelegramMessage(job.chatId, "⏳ Đang xử lý...");
@@ -318,7 +312,7 @@ async function handleJob(job: QueueJob): Promise<void> {
 
   // ── Edit progress message → final response ──
   const formattedText = markdownToTelegramHtml(response.text);
-  appendMessage(session.id, { role: "assistant", content: response.text, at: Date.now() });
+  await appendMessage(session.id, { role: "assistant", content: response.text, at: Date.now() });
 
   if (progressMsgId && formattedText.length <= 4000) {
     // Edit the progress message with final result
@@ -356,13 +350,13 @@ async function pollLoop(): Promise<void> {
 
         const userId = String(msg.from.id);
         const telegramName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") || msg.from.username || "User";
-        const userInfo = getUserInfo(userId, tenantId);
+        const userInfo = await getUserInfo(userId, tenantId);
         const userRole = userInfo.role;
         const userName = userInfo.displayName ?? telegramName;
 
         // Sync Telegram name to DB (if registered)
         if (userRole && userInfo.displayName !== telegramName) {
-          syncUserName(userId, tenantId, telegramName);
+          await syncUserName(userId, tenantId, telegramName);
         }
 
         // ── Registration flow (multi-step) ──
@@ -397,7 +391,7 @@ async function pollLoop(): Promise<void> {
           } else if (regState.step === "confirm") {
             if (text.toLowerCase() === "ok" || text.toLowerCase() === "xác nhận") {
               // Save pending user
-              createPendingUser(userId, tenantId, {
+              await createPendingUser(userId, tenantId, {
                 fullName: regState.fullName!,
                 phone: regState.phone!,
                 position: regState.position!,
@@ -411,7 +405,7 @@ async function pollLoop(): Promise<void> {
               );
 
               // Notify all admins
-              const adminIds = getAdminChatIds(tenantId);
+              const adminIds = await getAdminChatIds(tenantId);
               for (const adminId of adminIds) {
                 await sendTelegramMessage(adminId,
                   `🔔 <b>Yêu cầu đăng ký mới!</b>\n\n` +
@@ -439,18 +433,18 @@ async function pollLoop(): Promise<void> {
             );
           } else if (msg.text?.trim() === "/register") {
             // Check if already pending or exists
-            const existingUser = getDb().select({ isActive: tenantUsers.isActive }).from(tenantUsers)
+            const existingUser = (await getDb().select({ isActive: tenantUsers.isActive }).from(tenantUsers)
               .where(and(
                 eq(tenantUsers.tenantId, tenantId),
                 eq(tenantUsers.channel, "telegram"),
                 eq(tenantUsers.channelUserId, userId),
-              )).get();
+              )).limit(1))[0];
 
-            if (existingUser && existingUser.isActive === 0) {
+            if (existingUser && existingUser.isActive === false) {
               await sendTelegramMessage(msg.chat.id,
                 `⏳ Bạn đã đăng ký rồi, đang chờ admin duyệt. Vui lòng đợi nhé!`
               );
-            } else if (existingUser && existingUser.isActive === 1) {
+            } else if (existingUser && existingUser.isActive === true) {
               await sendTelegramMessage(msg.chat.id,
                 `✅ Bạn đã có tài khoản rồi! Hãy hỏi Milo bất kỳ điều gì.`
               );
@@ -474,7 +468,7 @@ async function pollLoop(): Promise<void> {
           const approveMatch = msg.text.match(/^\/approve\s+(\d+)$/);
           if (approveMatch) {
             const targetId = approveMatch[1];
-            if (approveUser(tenantId, targetId)) {
+            if (await approveUser(tenantId, targetId)) {
               await sendTelegramMessage(msg.chat.id, `✅ Đã duyệt user ${targetId}`);
               // Notify the approved user
               await sendTelegramMessage(targetId,
@@ -489,7 +483,7 @@ async function pollLoop(): Promise<void> {
           const rejectMatch = msg.text.match(/^\/reject\s+(\d+)$/);
           if (rejectMatch) {
             const targetId = rejectMatch[1];
-            if (rejectUser(tenantId, targetId)) {
+            if (await rejectUser(tenantId, targetId)) {
               await sendTelegramMessage(msg.chat.id, `❌ Đã từ chối user ${targetId}`);
               await sendTelegramMessage(targetId,
                 `😔 Yêu cầu đăng ký của bạn đã bị từ chối. Liên hệ admin nếu cần hỗ trợ.`
@@ -501,7 +495,7 @@ async function pollLoop(): Promise<void> {
           }
 
           if (msg.text.trim() === "/pending") {
-            const pending = getPendingUsers(tenantId);
+            const pending = await getPendingUsers(tenantId);
             if (pending.length === 0) {
               await sendTelegramMessage(msg.chat.id, "📋 Không có yêu cầu đăng ký nào đang chờ duyệt.");
             } else {
@@ -620,7 +614,7 @@ async function handleFileUpload(
         chatId,
         userId,
         userName,
-        userRole: getUserInfo(userId, tenantId).role ?? "user",
+        userRole: (await getUserInfo(userId, tenantId)).role ?? "user",
         text: `[File uploaded: ${fileName} (${mimeType}, ${sizeStr}) → ID: ${result.id}] ${caption}`,
         tenantId,
         priority: 3,

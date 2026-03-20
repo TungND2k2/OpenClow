@@ -19,13 +19,13 @@ export interface LogEntry {
 /**
  * Append a log entry for a task.
  */
-export function writeLog(input: {
+export async function writeLog(input: {
   taskId: string;
   agentId: string;
   level: LogLevel;
   message: string;
   metadata?: Record<string, unknown>;
-}): LogEntry {
+}): Promise<LogEntry> {
   const db = getDb();
   const now = nowMs();
   const id = newId();
@@ -40,7 +40,7 @@ export function writeLog(input: {
     createdAt: now,
   };
 
-  db.insert(taskLogs).values(record).run();
+  await db.insert(taskLogs).values(record);
 
   return {
     id,
@@ -56,12 +56,12 @@ export function writeLog(input: {
 /**
  * Get logs for a task with optional filters.
  */
-export function getLogs(filters: {
+export async function getLogs(filters: {
   taskId: string;
   level?: LogLevel;
   limit?: number;
   since?: number;
-}): LogEntry[] {
+}): Promise<LogEntry[]> {
   const db = getDb();
   const conditions: any[] = [eq(taskLogs.taskId, filters.taskId)];
 
@@ -72,13 +72,12 @@ export function getLogs(filters: {
     conditions.push(sql`${taskLogs.createdAt} >= ${filters.since}`);
   }
 
-  const rows = db
+  const rows = await db
     .select()
     .from(taskLogs)
     .where(and(...conditions))
     .orderBy(desc(taskLogs.createdAt))
-    .limit(filters.limit ?? 50)
-    .all();
+    .limit(filters.limit ?? 50);
 
   return rows.map((r) => ({
     id: r.id,
@@ -94,18 +93,17 @@ export function getLogs(filters: {
 /**
  * Get recent logs across all tasks for an agent.
  */
-export function getAgentLogs(
+export async function getAgentLogs(
   agentId: string,
   limit: number = 20
-): LogEntry[] {
+): Promise<LogEntry[]> {
   const db = getDb();
-  const rows = db
+  const rows = await db
     .select()
     .from(taskLogs)
     .where(eq(taskLogs.agentId, agentId))
     .orderBy(desc(taskLogs.createdAt))
-    .limit(limit)
-    .all();
+    .limit(limit);
 
   return rows.map((r) => ({
     id: r.id,

@@ -34,28 +34,28 @@ function toSession(row: any): ConversationSession {
 /**
  * Find or create a conversation session.
  */
-export function getOrCreateSession(input: {
+export async function getOrCreateSession(input: {
   tenantId: string;
   channel: "telegram" | "web" | "slack";
   channelUserId: string;
   userName?: string;
   userRole?: string;
-}): ConversationSession {
+}): Promise<ConversationSession> {
   const db = getDb();
 
-  const existing = db.select().from(conversationSessions).where(
+  const existing = (await db.select().from(conversationSessions).where(
     and(
       eq(conversationSessions.tenantId, input.tenantId),
       eq(conversationSessions.channel, input.channel),
       eq(conversationSessions.channelUserId, input.channelUserId),
     )
-  ).get();
+  ).limit(1))[0];
 
   if (existing) return toSession(existing);
 
   const now = nowMs();
   const id = newId();
-  db.insert(conversationSessions).values({
+  await db.insert(conversationSessions).values({
     id,
     tenantId: input.tenantId,
     channel: input.channel,
@@ -65,18 +65,18 @@ export function getOrCreateSession(input: {
     state: JSON.stringify({ messages: [] }),
     lastMessageAt: now,
     createdAt: now,
-  }).run();
+  });
 
-  return toSession(db.select().from(conversationSessions).where(eq(conversationSessions.id, id)).get()!);
+  return toSession((await db.select().from(conversationSessions).where(eq(conversationSessions.id, id)).limit(1))[0]!);
 }
 
 /**
  * Append a message to session.
  */
-export function appendMessage(sessionId: string, message: ChatMessage): ConversationSession {
+export async function appendMessage(sessionId: string, message: ChatMessage): Promise<ConversationSession> {
   const db = getDb();
   const now = nowMs();
-  const session = db.select().from(conversationSessions).where(eq(conversationSessions.id, sessionId)).get();
+  const session = (await db.select().from(conversationSessions).where(eq(conversationSessions.id, sessionId)).limit(1))[0];
   if (!session) throw new Error(`Session ${sessionId} not found`);
 
   let state = session.state as any;
@@ -87,29 +87,29 @@ export function appendMessage(sessionId: string, message: ChatMessage): Conversa
   state.messages = state.messages ?? [];
   state.messages.push(message);
 
-  db.update(conversationSessions).set({
+  await db.update(conversationSessions).set({
     state: JSON.stringify(state),
     lastMessageAt: now,
-  }).where(eq(conversationSessions.id, sessionId)).run();
+  }).where(eq(conversationSessions.id, sessionId));
 
-  return toSession(db.select().from(conversationSessions).where(eq(conversationSessions.id, sessionId)).get()!);
+  return toSession((await db.select().from(conversationSessions).where(eq(conversationSessions.id, sessionId)).limit(1))[0]!);
 }
 
 /**
  * Link session to a workflow instance.
  */
-export function linkToWorkflow(sessionId: string, instanceId: string): void {
+export async function linkToWorkflow(sessionId: string, instanceId: string): Promise<void> {
   const db = getDb();
-  db.update(conversationSessions).set({
+  await db.update(conversationSessions).set({
     activeInstanceId: instanceId,
-  }).where(eq(conversationSessions.id, sessionId)).run();
+  }).where(eq(conversationSessions.id, sessionId));
 }
 
 /**
  * Get session by ID.
  */
-export function getSession(sessionId: string): ConversationSession | null {
+export async function getSession(sessionId: string): Promise<ConversationSession | null> {
   const db = getDb();
-  const row = db.select().from(conversationSessions).where(eq(conversationSessions.id, sessionId)).get();
+  const row = (await db.select().from(conversationSessions).where(eq(conversationSessions.id, sessionId)).limit(1))[0];
   return row ? toSession(row) : null;
 }

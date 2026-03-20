@@ -1,34 +1,25 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
   integer,
+  bigint,
   real,
+  jsonb,
   primaryKey,
   index,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 
 // ============================================================
 // tasks
 // ============================================================
-export const tasks = sqliteTable(
+export const tasks = pgTable(
   "tasks",
   {
     id: text("id").primaryKey(),
     title: text("title").notNull(),
     description: text("description"),
-    status: text("status", {
-      enum: [
-        "pending",
-        "assigned",
-        "in_progress",
-        "delegated",
-        "blocked",
-        "completed",
-        "failed",
-        "cancelled",
-      ],
-    })
+    status: text("status")
       .notNull()
       .default("pending"),
     priority: integer("priority").notNull().default(3),
@@ -37,29 +28,25 @@ export const tasks = sqliteTable(
     createdByAgentId: text("created_by_agent_id").references(() => agents.id),
     delegatedByAgentId: text("delegated_by_agent_id"), // no FK — allows "system"
     parentTaskId: text("parent_task_id").references((): any => tasks.id),
-    executionStrategy: text("execution_strategy", {
-      enum: ["sequential", "parallel", "pipeline", "swarm"],
-    }),
-    dependencyIds: text("dependency_ids", { mode: "json" }).default("[]"),
+    executionStrategy: text("execution_strategy"),
+    dependencyIds: jsonb("dependency_ids").default([]),
     depth: integer("depth").notNull().default(0),
     maxDepth: integer("max_depth").notNull().default(5),
     retryCount: integer("retry_count").notNull().default(0),
     maxRetries: integer("max_retries").notNull().default(3),
     escalationAgentId: text("escalation_agent_id").references(() => agents.id),
-    requiredCapabilities: text("required_capabilities", {
-      mode: "json",
-    }).default("[]"),
+    requiredCapabilities: jsonb("required_capabilities").default([]),
     estimatedDurationMs: integer("estimated_duration_ms"),
     costBudgetUsd: real("cost_budget_usd"),
     costSpentUsd: real("cost_spent_usd").notNull().default(0.0),
-    tags: text("tags", { mode: "json" }).default("[]"),
+    tags: jsonb("tags").default([]),
     result: text("result"),
     error: text("error"),
-    createdAt: integer("created_at").notNull(),
-    assignedAt: integer("assigned_at"),
-    startedAt: integer("started_at"),
-    completedAt: integer("completed_at"),
-    deadline: integer("deadline"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    assignedAt: bigint("assigned_at", { mode: "number" }),
+    startedAt: bigint("started_at", { mode: "number" }),
+    completedAt: bigint("completed_at", { mode: "number" }),
+    deadline: bigint("deadline", { mode: "number" }),
   },
   (table) => [
     index("idx_tasks_status").on(table.status),
@@ -73,7 +60,7 @@ export const tasks = sqliteTable(
 // ============================================================
 // task_dependencies
 // ============================================================
-export const taskDependencies = sqliteTable(
+export const taskDependencies = pgTable(
   "task_dependencies",
   {
     taskId: text("task_id")
@@ -82,9 +69,7 @@ export const taskDependencies = sqliteTable(
     dependsOnId: text("depends_on_id")
       .notNull()
       .references(() => tasks.id),
-    status: text("status", {
-      enum: ["pending", "satisfied", "failed"],
-    })
+    status: text("status")
       .notNull()
       .default("pending"),
   },
@@ -97,7 +82,7 @@ export const taskDependencies = sqliteTable(
 // ============================================================
 // task_logs
 // ============================================================
-export const taskLogs = sqliteTable(
+export const taskLogs = pgTable(
   "task_logs",
   {
     id: text("id").primaryKey(),
@@ -107,12 +92,10 @@ export const taskLogs = sqliteTable(
     agentId: text("agent_id")
       .notNull()
       .references(() => agents.id),
-    level: text("level", {
-      enum: ["debug", "info", "warn", "error"],
-    }).notNull(),
+    level: text("level").notNull(),
     message: text("message").notNull(),
-    metadata: text("metadata", { mode: "json" }),
-    createdAt: integer("created_at").notNull(),
+    metadata: jsonb("metadata"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_task_logs_task").on(table.taskId),

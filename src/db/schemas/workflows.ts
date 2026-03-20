@@ -1,18 +1,19 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
   integer,
+  bigint,
+  jsonb,
   uniqueIndex,
   index,
-} from "drizzle-orm/sqlite-core";
-import { agents } from "./agents.js";
+} from "drizzle-orm/pg-core";
 import { tasks } from "./tasks.js";
 import { tenants } from "./tenants.js";
 
 // ============================================================
 // workflow_templates
 // ============================================================
-export const workflowTemplates = sqliteTable(
+export const workflowTemplates = pgTable(
   "workflow_templates",
   {
     id: text("id").primaryKey(),
@@ -23,16 +24,14 @@ export const workflowTemplates = sqliteTable(
     description: text("description"),
     domain: text("domain"),
     version: integer("version").notNull().default(1),
-    stages: text("stages", { mode: "json" }).notNull(),
-    triggerConfig: text("trigger_config", { mode: "json" }),
-    config: text("config", { mode: "json" }),
-    status: text("status", {
-      enum: ["draft", "active", "archived"],
-    })
+    stages: jsonb("stages").notNull(),
+    triggerConfig: jsonb("trigger_config"),
+    config: jsonb("config"),
+    status: text("status")
       .notNull()
       .default("draft"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [
     uniqueIndex("idx_wf_templates_tenant_name_ver").on(
@@ -48,7 +47,7 @@ export const workflowTemplates = sqliteTable(
 // ============================================================
 // form_templates
 // ============================================================
-export const formTemplates = sqliteTable(
+export const formTemplates = pgTable(
   "form_templates",
   {
     id: text("id").primaryKey(),
@@ -56,16 +55,14 @@ export const formTemplates = sqliteTable(
       .notNull()
       .references(() => tenants.id),
     name: text("name").notNull(),
-    schema: text("schema", { mode: "json" }).notNull(),
-    uiHints: text("ui_hints", { mode: "json" }),
+    schema: jsonb("schema").notNull(),
+    uiHints: jsonb("ui_hints"),
     version: integer("version").notNull().default(1),
-    status: text("status", {
-      enum: ["active", "archived"],
-    })
+    status: text("status")
       .notNull()
       .default("active"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [index("idx_form_templates_tenant").on(table.tenantId)]
 );
@@ -73,7 +70,7 @@ export const formTemplates = sqliteTable(
 // ============================================================
 // business_rules
 // ============================================================
-export const businessRules = sqliteTable(
+export const businessRules = pgTable(
   "business_rules",
   {
     id: text("id").primaryKey(),
@@ -83,19 +80,15 @@ export const businessRules = sqliteTable(
     name: text("name").notNull(),
     description: text("description"),
     domain: text("domain"),
-    ruleType: text("rule_type", {
-      enum: ["validation", "approval", "routing", "calculation", "auto_action"],
-    }).notNull(),
-    conditions: text("conditions", { mode: "json" }).notNull(),
-    actions: text("actions", { mode: "json" }).notNull(),
+    ruleType: text("rule_type").notNull(),
+    conditions: jsonb("conditions").notNull(),
+    actions: jsonb("actions").notNull(),
     priority: integer("priority").notNull().default(0),
-    status: text("status", {
-      enum: ["active", "disabled"],
-    })
+    status: text("status")
       .notNull()
       .default("active"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_business_rules_tenant").on(table.tenantId),
@@ -107,7 +100,7 @@ export const businessRules = sqliteTable(
 // ============================================================
 // workflow_instances
 // ============================================================
-export const workflowInstances = sqliteTable(
+export const workflowInstances = pgTable(
   "workflow_instances",
   {
     id: text("id").primaryKey(),
@@ -119,25 +112,21 @@ export const workflowInstances = sqliteTable(
       .references(() => tenants.id),
     initiatedBy: text("initiated_by").notNull(),
     currentStageId: text("current_stage_id"),
-    status: text("status", {
-      enum: ["active", "paused", "completed", "failed", "cancelled"],
-    })
+    status: text("status")
       .notNull()
       .default("active"),
-    formData: text("form_data", { mode: "json" }).notNull().default("{}"),
-    contextData: text("context_data", { mode: "json" })
+    formData: jsonb("form_data").notNull().default({}),
+    contextData: jsonb("context_data")
       .notNull()
-      .default("{}"),
+      .default({}),
     taskId: text("task_id").references(() => tasks.id),
     conversationId: text("conversation_id"),
-    channel: text("channel", {
-      enum: ["telegram", "web", "api", "slack"],
-    }),
-    history: text("history", { mode: "json" }).notNull().default("[]"),
+    channel: text("channel"),
+    history: jsonb("history").notNull().default([]),
     error: text("error"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
-    completedAt: integer("completed_at"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+    completedAt: bigint("completed_at", { mode: "number" }),
   },
   (table) => [
     index("idx_wf_instances_template").on(table.templateId),
@@ -150,7 +139,7 @@ export const workflowInstances = sqliteTable(
 // ============================================================
 // workflow_approvals
 // ============================================================
-export const workflowApprovals = sqliteTable(
+export const workflowApprovals = pgTable(
   "workflow_approvals",
   {
     id: text("id").primaryKey(),
@@ -159,17 +148,15 @@ export const workflowApprovals = sqliteTable(
       .references(() => workflowInstances.id),
     stageId: text("stage_id").notNull(),
     approverId: text("approver_id").notNull(),
-    status: text("status", {
-      enum: ["pending", "approved", "rejected", "escalated", "auto_approved"],
-    })
+    status: text("status")
       .notNull()
       .default("pending"),
     decisionReason: text("decision_reason"),
     autoApprovedByRuleId: text("auto_approved_by_rule_id").references(
       () => businessRules.id
     ),
-    createdAt: integer("created_at").notNull(),
-    decidedAt: integer("decided_at"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    decidedAt: bigint("decided_at", { mode: "number" }),
   },
   (table) => [
     index("idx_wf_approvals_instance").on(table.instanceId),
@@ -181,7 +168,7 @@ export const workflowApprovals = sqliteTable(
 // ============================================================
 // integrations
 // ============================================================
-export const integrations = sqliteTable(
+export const integrations = pgTable(
   "integrations",
   {
     id: text("id").primaryKey(),
@@ -189,26 +176,14 @@ export const integrations = sqliteTable(
       .notNull()
       .references(() => tenants.id),
     name: text("name").notNull(),
-    type: text("type", {
-      enum: [
-        "telegram",
-        "webhook",
-        "email",
-        "slack",
-        "whatsapp",
-        "sms",
-        "custom",
-      ],
-    }).notNull(),
-    config: text("config", { mode: "json" }).notNull(),
-    status: text("status", {
-      enum: ["active", "disabled", "error"],
-    })
+    type: text("type").notNull(),
+    config: jsonb("config").notNull(),
+    status: text("status")
       .notNull()
       .default("active"),
-    lastUsedAt: integer("last_used_at"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    lastUsedAt: bigint("last_used_at", { mode: "number" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_integrations_tenant").on(table.tenantId),
@@ -219,25 +194,23 @@ export const integrations = sqliteTable(
 // ============================================================
 // conversation_sessions
 // ============================================================
-export const conversationSessions = sqliteTable(
+export const conversationSessions = pgTable(
   "conversation_sessions",
   {
     id: text("id").primaryKey(),
     tenantId: text("tenant_id")
       .notNull()
       .references(() => tenants.id),
-    channel: text("channel", {
-      enum: ["telegram", "web", "slack"],
-    }).notNull(),
+    channel: text("channel").notNull(),
     channelUserId: text("channel_user_id").notNull(),
     userName: text("user_name"),
     userRole: text("user_role"),
     activeInstanceId: text("active_instance_id").references(
       () => workflowInstances.id
     ),
-    state: text("state", { mode: "json" }).notNull().default("{}"),
-    lastMessageAt: integer("last_message_at").notNull(),
-    createdAt: integer("created_at").notNull(),
+    state: jsonb("state").notNull().default({}),
+    lastMessageAt: bigint("last_message_at", { mode: "number" }).notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_conv_sessions_tenant").on(table.tenantId),

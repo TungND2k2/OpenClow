@@ -3,7 +3,7 @@
  *
  * On startup:
  *   1. Seed default templates if none exist
- *   2. Auto-spawn agents from templates with autoSpawn=1
+ *   2. Auto-spawn agents from templates with autoSpawn=true
  *   3. Load existing agents from DB → create runners
  *
  * At runtime:
@@ -54,20 +54,20 @@ class AgentPool {
 
   // ── Init (called once at startup) ─────────────────────────
 
-  init(config: { toolExecutor: ((tool: string, args: Record<string, unknown>, tenantId: string) => Promise<unknown>) | null }): void {
+  async init(config: { toolExecutor: ((tool: string, args: Record<string, unknown>, tenantId: string) => Promise<unknown>) | null }): Promise<void> {
     this.toolExecutor = config.toolExecutor;
 
     // 1. Seed default templates if empty
-    this.seedDefaults();
+    await this.seedDefaults();
 
     // 2. Auto-spawn from templates
-    this.autoSpawn();
+    await this.autoSpawn();
 
     // 3. Load existing active agents → create runners
-    const activeAgents = listAgents().filter(a => a.status !== "deactivated");
+    const activeAgents = (await listAgents()).filter(a => a.status !== "deactivated");
     for (const agent of activeAgents) {
-      this.createRunner(agent);
-      heartbeat(agent.id);
+      await this.createRunner(agent);
+      await heartbeat(agent.id);
     }
 
     const commander = this.getCommander();
@@ -78,11 +78,11 @@ class AgentPool {
 
   // ── Spawn agent from template (runtime) ───────────────────
 
-  spawnAgent(templateId?: string, templateName?: string, parentAgentId?: string, count?: number): AgentRunner[] {
+  async spawnAgent(templateId?: string, templateName?: string, parentAgentId?: string, count?: number): Promise<AgentRunner[]> {
     let template: TemplateRecord | null = null;
 
-    if (templateId) template = getTemplate(templateId);
-    if (!template && templateName) template = getTemplateByName(templateName);
+    if (templateId) template = await getTemplate(templateId);
+    if (!template && templateName) template = await getTemplateByName(templateName);
     if (!template) throw new Error(`Template not found: ${templateId ?? templateName}`);
     if (template.status === "archived") throw new Error(`Template "${template.name}" is archived`);
 
@@ -104,13 +104,13 @@ class AgentPool {
       ? JSON.parse(template.capabilities) : template.capabilities;
 
     for (let i = 0; i < spawnCount; i++) {
-      const existing = this.getAgentsByTemplate(template.id);
+      const existing = await this.getAgentsByTemplate(template.id);
       const idx = existing.length + 1;
       const name = spawnCount === 1 && idx === 1 ? template.name : `${template.name}-${idx}`;
 
-      const agent = registerAgent({
+      const agent = await registerAgent({
         name,
-        role: template.role,
+        role: template.role as any,
         capabilities: caps,
         parentAgentId,
         maxConcurrentTasks: template.maxConcurrentTasks,
@@ -118,8 +118,8 @@ class AgentPool {
         templateId: template.id,
       });
 
-      heartbeat(agent.id);
-      const runner = this.createRunner(agent, template);
+      await heartbeat(agent.id);
+      const runner = await this.createRunner(agent, template);
       spawned.push(runner);
       console.error(`[AgentPool] Spawned: ${name} (${template.role}) from template "${template.name}"`);
     }
@@ -129,12 +129,12 @@ class AgentPool {
 
   // ── Kill agent (runtime) ──────────────────────────────────
 
-  killAgent(agentId: string): void {
+  async killAgent(agentId: string): Promise<void> {
     const runner = this.runners.get(agentId);
     if (!runner) throw new Error(`Agent not found: ${agentId}`);
     if (runner.agent.role === "commander") throw new Error("Cannot kill Commander");
 
-    updateAgentStatus(agentId, "deactivated");
+    await updateAgentStatus(agentId, "deactivated");
     this.runners.delete(agentId);
     console.error(`[AgentPool] Killed: ${runner.agent.name} (${agentId})`);
   }
@@ -156,10 +156,10 @@ class AgentPool {
     return [...this.runners.values()].filter(r => r.agent.role === role);
   }
 
-  getAvailableWorker(): AgentRunner | null {
+  async getAvailableWorker(): Promise<AgentRunner | null> {
     for (const runner of this.runners.values()) {
       if (runner.agent.role === "worker") {
-        const agent = getAgent(runner.agent.id);
+        const agent = await getAgent(runner.agent.id);
         if (agent && (agent.status === "idle" || agent.status === "busy")) return runner;
       }
     }
@@ -176,10 +176,10 @@ class AgentPool {
 
   // ── Private: create runner for agent ──────────────────────
 
-  private createRunner(agent: AgentRecord, template?: TemplateRecord | null): AgentRunner {
+  private async createRunner(agent: AgentRecord, template?: TemplateRecord | null): Promise<AgentRunner> {
     // Resolve template if not provided
     if (!template && agent.templateId) {
-      template = getTemplate(agent.templateId);
+      template = await getTemplate(agent.templateId);
     }
 
     const engine: LLMEngine = (template?.engine as LLMEngine) ?? "fast-api";
@@ -209,13 +209,13 @@ class AgentPool {
 
   // ── Private: seed default templates on first boot ─────────
 
-  private seedDefaults(): void {
-    const existing = listTemplates();
+  private async seedDefaults(): Promise<void> {
+    const existing = await listTemplates();
     if (existing.length > 0) return;
 
     console.error("[AgentPool] First boot — seeding default templates...");
 
-    createTemplate({
+    await createTemplate({
       name: "Commander",
       role: "commander",
       systemPrompt: "Bạn là Commander — bộ não trung tâm. Phân tích yêu cầu, phân rã task phức tạp, giao cho Workers/Supervisors, tổng hợp kết quả.",
@@ -227,7 +227,7 @@ class AgentPool {
       autoSpawnCount: 1,
     });
 
-    createTemplate({
+    await createTemplate({
       name: "General Worker",
       role: "worker",
       systemPrompt: "Bạn là Worker — thực thi task cụ thể. Dùng tools để hoàn thành công việc được giao. Báo cáo kết quả cho Supervisor/Commander.",
@@ -244,9 +244,9 @@ class AgentPool {
 
   // ── Private: auto-spawn from templates ────────────────────
 
-  private autoSpawn(): void {
-    const templates = listTemplates({ status: "active" });
-    const existingAgents = listAgents().filter(a => a.status !== "deactivated");
+  private async autoSpawn(): Promise<void> {
+    const templates = await listTemplates({ status: "active" });
+    const existingAgents = (await listAgents()).filter(a => a.status !== "deactivated");
 
     for (const tmpl of templates) {
       if (!tmpl.autoSpawn) continue;
@@ -272,9 +272,9 @@ class AgentPool {
         const idx = current.length + i + 1;
         const name = tmpl.role === "commander" ? tmpl.name : `${tmpl.name}-${idx}`;
 
-        const agent = registerAgent({
+        const agent = await registerAgent({
           name,
-          role: tmpl.role,
+          role: tmpl.role as any,
           capabilities: caps,
           parentAgentId: parentId,
           maxConcurrentTasks: tmpl.maxConcurrentTasks,
@@ -288,9 +288,9 @@ class AgentPool {
 
   // ── Private: query agents by template ─────────────────────
 
-  private getAgentsByTemplate(templateId: string): AgentRecord[] {
-    return getDb().select().from(agents)
-      .where(eq(agents.templateId, templateId)).all() as AgentRecord[];
+  private async getAgentsByTemplate(templateId: string): Promise<AgentRecord[]> {
+    return await getDb().select().from(agents)
+      .where(eq(agents.templateId, templateId)) as AgentRecord[];
   }
 }
 
@@ -302,13 +302,13 @@ export const agentPool = new AgentPool();
 
 export function getCommander(): AgentRunner | null { return agentPool.getCommander(); }
 export function getWorkerRunners(): AgentRunner[] { return agentPool.getRunnersByRole("worker"); }
-export function getAvailableWorker(): AgentRunner | null { return agentPool.getAvailableWorker(); }
+export function getAvailableWorker(): Promise<AgentRunner | null> { return agentPool.getAvailableWorker(); }
 export function getRunnerByAgentId(agentId: string): AgentRunner | null { return agentPool.getRunner(agentId); }
 export function getToolDefinitions(): ToolDefinition[] { return agentPool.getToolDefinitions(); }
 
 // Backward compat: old init function redirects to new pool
-export function initAgentPool(config: { workerCount?: number; toolExecutor: any }): { commander: AgentRunner; workers: AgentRunner[] } {
-  agentPool.init({ toolExecutor: config.toolExecutor });
+export async function initAgentPool(config: { workerCount?: number; toolExecutor: any }): Promise<{ commander: AgentRunner; workers: AgentRunner[] }> {
+  await agentPool.init({ toolExecutor: config.toolExecutor });
   return {
     commander: agentPool.getCommander()!,
     workers: agentPool.getRunnersByRole("worker"),

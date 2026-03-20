@@ -1,32 +1,31 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
+  bigint,
   integer,
   real,
   uniqueIndex,
   index,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { tasks } from "./tasks.js";
 
 // ============================================================
 // notebooks
 // ============================================================
-export const notebooks = sqliteTable(
+export const notebooks = pgTable(
   "notebooks",
   {
     id: text("id").primaryKey(),
     namespace: text("namespace").notNull(),
     key: text("key").notNull(),
     value: text("value").notNull(),
-    contentType: text("content_type", {
-      enum: ["text/markdown", "application/json", "text/plain"],
-    })
+    contentType: text("content_type")
       .notNull()
       .default("text/plain"),
     createdByAgentId: text("created_by_agent_id").references(() => agents.id),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [
     uniqueIndex("idx_notebooks_ns_key").on(table.namespace, table.key),
@@ -37,7 +36,7 @@ export const notebooks = sqliteTable(
 // ============================================================
 // token_usage
 // ============================================================
-export const tokenUsage = sqliteTable(
+export const tokenUsage = pgTable(
   "token_usage",
   {
     id: text("id").primaryKey(),
@@ -49,7 +48,7 @@ export const tokenUsage = sqliteTable(
     inputTokens: integer("input_tokens").notNull(),
     outputTokens: integer("output_tokens").notNull(),
     costUsd: real("cost_usd").notNull(),
-    createdAt: integer("created_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_token_usage_agent").on(table.agentId),

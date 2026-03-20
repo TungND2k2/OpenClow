@@ -1,10 +1,9 @@
 import { defineConfig } from "drizzle-kit";
-
 export default defineConfig({
+  schema: "./src/db/schemas/*",
   out: "./drizzle",
-  schema: "./src/db/schemas/*.ts",
-  dialect: "sqlite",
+  dialect: "postgresql",
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? "./data/openclaw.db",
+    url: process.env.DATABASE_URL ?? "postgresql://openclaw:openclaw123@localhost:5432/openclaw",
   },
 });

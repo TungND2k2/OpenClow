@@ -28,12 +28,12 @@ export type TemplateRecord = typeof agentTemplates.$inferSelect;
 
 // ── Create ──────────────────────────────────────────────────
 
-export function createTemplate(input: CreateTemplateInput): TemplateRecord {
+export async function createTemplate(input: CreateTemplateInput): Promise<TemplateRecord> {
   const db = getDb();
   const now = nowMs();
   const id = newId();
 
-  db.insert(agentTemplates).values({
+  await db.insert(agentTemplates).values({
     id,
     name: input.name,
     role: input.role,
@@ -44,41 +44,41 @@ export function createTemplate(input: CreateTemplateInput): TemplateRecord {
     maxConcurrentTasks: input.maxConcurrentTasks ?? 1,
     maxToolLoops: input.maxToolLoops ?? 5,
     costBudgetUsd: input.costBudgetUsd ?? null,
-    autoSpawn: input.autoSpawn ? 1 : 0,
+    autoSpawn: input.autoSpawn ?? false,
     autoSpawnCount: input.autoSpawnCount ?? 1,
     status: "active",
     createdAt: now,
     updatedAt: now,
-  }).run();
+  });
 
-  return db.select().from(agentTemplates).where(eq(agentTemplates.id, id)).get()!;
+  return (await db.select().from(agentTemplates).where(eq(agentTemplates.id, id)).limit(1))[0]!;
 }
 
 // ── Read ────────────────────────────────────────────────────
 
-export function getTemplate(id: string): TemplateRecord | null {
-  return getDb().select().from(agentTemplates).where(eq(agentTemplates.id, id)).get() ?? null;
+export async function getTemplate(id: string): Promise<TemplateRecord | null> {
+  return (await getDb().select().from(agentTemplates).where(eq(agentTemplates.id, id)).limit(1))[0] ?? null;
 }
 
-export function getTemplateByName(name: string): TemplateRecord | null {
-  return getDb().select().from(agentTemplates).where(eq(agentTemplates.name, name)).get() ?? null;
+export async function getTemplateByName(name: string): Promise<TemplateRecord | null> {
+  return (await getDb().select().from(agentTemplates).where(eq(agentTemplates.name, name)).limit(1))[0] ?? null;
 }
 
-export function listTemplates(filters?: { role?: string; status?: string }): TemplateRecord[] {
+export async function listTemplates(filters?: { role?: string; status?: string }): Promise<TemplateRecord[]> {
   const db = getDb();
   const conditions: any[] = [];
 
   if (filters?.role) conditions.push(eq(agentTemplates.role, filters.role as any));
   if (filters?.status) conditions.push(eq(agentTemplates.status, filters.status as any));
 
-  if (conditions.length === 0) return db.select().from(agentTemplates).all();
-  if (conditions.length === 1) return db.select().from(agentTemplates).where(conditions[0]).all();
-  return db.select().from(agentTemplates).where(and(...conditions)).all();
+  if (conditions.length === 0) return await db.select().from(agentTemplates);
+  if (conditions.length === 1) return await db.select().from(agentTemplates).where(conditions[0]);
+  return await db.select().from(agentTemplates).where(and(...conditions));
 }
 
 // ── Update ──────────────────────────────────────────────────
 
-export function updateTemplate(id: string, updates: Partial<CreateTemplateInput>): void {
+export async function updateTemplate(id: string, updates: Partial<CreateTemplateInput>): Promise<void> {
   const db = getDb();
   const values: Record<string, unknown> = { updatedAt: nowMs() };
 
@@ -91,14 +91,14 @@ export function updateTemplate(id: string, updates: Partial<CreateTemplateInput>
   if (updates.maxConcurrentTasks !== undefined) values.maxConcurrentTasks = updates.maxConcurrentTasks;
   if (updates.maxToolLoops !== undefined) values.maxToolLoops = updates.maxToolLoops;
   if (updates.costBudgetUsd !== undefined) values.costBudgetUsd = updates.costBudgetUsd;
-  if (updates.autoSpawn !== undefined) values.autoSpawn = updates.autoSpawn ? 1 : 0;
+  if (updates.autoSpawn !== undefined) values.autoSpawn = updates.autoSpawn;
   if (updates.autoSpawnCount !== undefined) values.autoSpawnCount = updates.autoSpawnCount;
 
-  db.update(agentTemplates).set(values).where(eq(agentTemplates.id, id)).run();
+  await db.update(agentTemplates).set(values).where(eq(agentTemplates.id, id));
 }
 
 // ── Archive ─────────────────────────────────────────────────
 
-export function archiveTemplate(id: string): void {
-  getDb().update(agentTemplates).set({ status: "archived", updatedAt: nowMs() }).where(eq(agentTemplates.id, id)).run();
+export async function archiveTemplate(id: string): Promise<void> {
+  await getDb().update(agentTemplates).set({ status: "archived", updatedAt: nowMs() }).where(eq(agentTemplates.id, id));
 }

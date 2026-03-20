@@ -17,7 +17,7 @@ function toEntry(row: any): KnowledgeEntry {
 /**
  * Store a knowledge entry.
  */
-export function storeKnowledge(input: {
+export async function storeKnowledge(input: {
   type: KnowledgeType;
   title: string;
   content: string;
@@ -29,7 +29,7 @@ export function storeKnowledge(input: {
   outcome?: "success" | "failure" | "neutral";
   confidence?: number;
   contextSnapshot?: Record<string, unknown>;
-}): KnowledgeEntry {
+}): Promise<KnowledgeEntry> {
   const db = getDb();
   const now = nowMs();
   const id = newId();
@@ -57,7 +57,7 @@ export function storeKnowledge(input: {
     updatedAt: now,
   };
 
-  db.insert(knowledgeEntries).values(record).run();
+  await db.insert(knowledgeEntries).values(record);
 
   return { ...record, tags: input.tags, contextSnapshot: input.contextSnapshot ?? null } as KnowledgeEntry;
 }
@@ -65,13 +65,13 @@ export function storeKnowledge(input: {
 /**
  * Retrieve relevant knowledge for a task context.
  */
-export function retrieveKnowledge(context: {
+export async function retrieveKnowledge(context: {
   tags: string[];
   capabilities: string[];
   domain: string;
   scope?: string[];
   limit?: number;
-}): RetrievedKnowledge[] {
+}): Promise<RetrievedKnowledge[]> {
   const db = getDb();
 
   // Get candidate entries
@@ -87,12 +87,11 @@ export function retrieveKnowledge(context: {
     conditions.push(sql`(${sql.join(scopeConditions, sql` OR `)})`);
   }
 
-  const candidates = db
+  const candidates = await db
     .select()
     .from(knowledgeEntries)
     .where(and(...conditions))
-    .limit(200)
-    .all();
+    .limit(200);
 
   // Score and rank
   const scored: RetrievedKnowledge[] = candidates.map((row) => {
@@ -113,31 +112,31 @@ export function retrieveKnowledge(context: {
 /**
  * Record that knowledge was applied to a task.
  */
-export function recordApplication(input: {
+export async function recordApplication(input: {
   knowledgeId: string;
   taskId: string;
   agentId: string;
-}): void {
+}): Promise<void> {
   const db = getDb();
   const now = nowMs();
   const id = newId();
 
-  db.insert(knowledgeApplications).values({
+  await db.insert(knowledgeApplications).values({
     id,
     knowledgeId: input.knowledgeId,
     taskId: input.taskId,
     agentId: input.agentId,
     createdAt: now,
-  }).run();
+  });
 
   // Increment usage count
-  db.run(sql`UPDATE knowledge_entries SET usage_count = usage_count + 1, updated_at = ${now} WHERE id = ${input.knowledgeId}`);
+  await db.execute(sql`UPDATE knowledge_entries SET usage_count = usage_count + 1, updated_at = ${now} WHERE id = ${input.knowledgeId}`);
 }
 
 /**
  * Extract knowledge from a completed/failed task.
  */
-export function extractFromTask(input: {
+export async function extractFromTask(input: {
   taskId: string;
   taskTitle: string;
   taskTags: string[];
@@ -148,7 +147,7 @@ export function extractFromTask(input: {
   error?: string;
   retryCount?: number;
   agentPerformanceScore?: number;
-}): KnowledgeEntry | null {
+}): Promise<KnowledgeEntry | null> {
   let type: KnowledgeType;
   let title: string;
   let content: string;

@@ -54,7 +54,7 @@ export function registerRulesTools(server: McpServer): void {
     const db = getDb();
     const now = nowMs();
     const id = newId();
-    db.insert(businessRules).values({
+    await db.insert(businessRules).values({
       id,
       tenantId: params.tenant_id,
       name: params.name,
@@ -67,7 +67,7 @@ export function registerRulesTools(server: McpServer): void {
       status: "active",
       createdAt: now,
       updatedAt: now,
-    }).run();
+    });
     return { content: [{ type: "text", text: JSON.stringify({ id, name: params.name }, null, 2) }] };
   });
 
@@ -79,7 +79,7 @@ export function registerRulesTools(server: McpServer): void {
     const results: { ruleId: string; name: string; matched: boolean; actions: any[] }[] = [];
 
     for (const ruleId of rule_ids) {
-      const rule = db.select().from(businessRules).where(eq(businessRules.id, ruleId)).get();
+      const rule = (await db.select().from(businessRules).where(eq(businessRules.id, ruleId)).limit(1))[0];
       if (!rule) continue;
 
       const conditions = rule.conditions as any;
@@ -103,7 +103,7 @@ export function registerRulesTools(server: McpServer): void {
     const conditions: any[] = [eq(businessRules.tenantId, params.tenant_id)];
     if (params.domain) conditions.push(eq(businessRules.domain, params.domain));
     if (params.rule_type) conditions.push(eq(businessRules.ruleType, params.rule_type as any));
-    const rows = db.select().from(businessRules).where(and(...conditions)).all();
+    const rows = await db.select().from(businessRules).where(and(...conditions));
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   });
 }

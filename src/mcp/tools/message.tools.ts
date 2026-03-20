@@ -11,7 +11,7 @@ export function registerMessageTools(server: McpServer): void {
     payload: z.record(z.unknown()),
     priority: z.number().optional(),
   }, async (params) => {
-    const msg = msgService.sendMessage({
+    const msg = await msgService.sendMessage({
       fromAgentId: params.from_agent_id,
       toAgentId: params.to_agent_id,
       type: params.type,
@@ -28,7 +28,7 @@ export function registerMessageTools(server: McpServer): void {
     since: z.number().optional(),
     limit: z.number().optional(),
   }, async (params) => {
-    const msgs = msgService.checkMessages({
+    const msgs = await msgService.checkMessages({
       agentId: params.agent_id,
       type: params.type,
       since: params.since,
@@ -42,7 +42,7 @@ export function registerMessageTools(server: McpServer): void {
     agent_id: z.string(),
   }, async ({ message_id, agent_id }) => {
     try {
-      msgService.acknowledgeMessage(message_id, agent_id);
+      await msgService.acknowledgeMessage(message_id, agent_id);
       return { content: [{ type: "text", text: "OK" }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: e.message }], isError: true };
@@ -55,7 +55,7 @@ export function registerMessageTools(server: McpServer): void {
     payload: z.record(z.unknown()),
     task_id: z.string().optional(),
   }, async (params) => {
-    const msgs = msgService.broadcast(params.from_agent_id, params.scope, params.payload, params.task_id);
+    const msgs = await msgService.broadcast(params.from_agent_id, params.scope, params.payload, params.task_id);
     return { content: [{ type: "text", text: `Broadcast sent to ${msgs.length} agents` }] };
   });
 }

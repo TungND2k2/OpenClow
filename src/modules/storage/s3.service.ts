@@ -80,7 +80,7 @@ export async function uploadFile(input: {
 
   // Save metadata to DB
   const db = getDb();
-  db.insert(files).values({
+  await db.insert(files).values({
     id,
     tenantId: input.tenantId,
     fileName: input.fileName,
@@ -93,7 +93,7 @@ export async function uploadFile(input: {
     taskId: input.taskId ?? null,
     workflowInstanceId: input.workflowInstanceId ?? null,
     createdAt: nowMs(),
-  }).run();
+  });
 
   console.error(`[S3] ✓ Uploaded: ${id} (${s3Key})`);
   return { id, s3Key, s3Url };
@@ -109,7 +109,7 @@ export async function downloadFile(fileId: string): Promise<{
   fileSize: number;
 } | null> {
   const db = getDb();
-  const file = db.select().from(files).where(eq(files.id, fileId)).get();
+  const file = (await db.select().from(files).where(eq(files.id, fileId)).limit(1))[0];
   if (!file) return null;
 
   const config = getConfig();
@@ -138,7 +138,7 @@ export async function readFileContent(fileId: string): Promise<{
   truncated: boolean;
 } | null> {
   const db = getDb();
-  const file = db.select().from(files).where(eq(files.id, fileId)).get();
+  const file = (await db.select().from(files).where(eq(files.id, fileId)).limit(1))[0];
   if (!file) return null;
 
   const config = getConfig();
@@ -185,7 +185,7 @@ export async function readFileContent(fileId: string): Promise<{
  */
 export async function deleteFile(fileId: string): Promise<boolean> {
   const db = getDb();
-  const file = db.select().from(files).where(eq(files.id, fileId)).get();
+  const file = (await db.select().from(files).where(eq(files.id, fileId)).limit(1))[0];
   if (!file) return false;
 
   const config = getConfig();
@@ -196,7 +196,7 @@ export async function deleteFile(fileId: string): Promise<boolean> {
     Key: file.s3Key,
   }));
 
-  db.delete(files).where(eq(files.id, fileId)).run();
+  await db.delete(files).where(eq(files.id, fileId));
   console.error(`[S3] Deleted: ${fileId} (${file.s3Key})`);
   return true;
 }
@@ -204,22 +204,21 @@ export async function deleteFile(fileId: string): Promise<boolean> {
 /**
  * Get file metadata from DB.
  */
-export function getFile(fileId: string) {
+export async function getFile(fileId: string) {
   const db = getDb();
-  return db.select().from(files).where(eq(files.id, fileId)).get() ?? null;
+  return (await db.select().from(files).where(eq(files.id, fileId)).limit(1))[0] ?? null;
 }
 
 /**
  * List files for a tenant.
  */
-export function listFiles(tenantId: string, limit: number = 20) {
+export async function listFiles(tenantId: string, limit: number = 20) {
   const db = getDb();
-  return db.select()
+  return await db.select()
     .from(files)
     .where(eq(files.tenantId, tenantId))
     .orderBy(files.createdAt)
-    .limit(limit)
-    .all();
+    .limit(limit);
 }
 
 /**

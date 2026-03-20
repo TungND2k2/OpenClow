@@ -10,7 +10,7 @@ export function registerNotebookTools(server: McpServer): void {
     content_type: z.enum(["text/markdown", "application/json", "text/plain"]).optional(),
     agent_id: z.string().optional(),
   }, async (params) => {
-    const entry = nbService.notebookWrite({
+    const entry = await nbService.notebookWrite({
       namespace: params.namespace,
       key: params.key,
       value: params.value,
@@ -24,7 +24,7 @@ export function registerNotebookTools(server: McpServer): void {
     namespace: z.string(),
     key: z.string(),
   }, async ({ namespace, key }) => {
-    const entry = nbService.notebookRead(namespace, key);
+    const entry = await nbService.notebookRead(namespace, key);
     if (!entry) return { content: [{ type: "text", text: "Not found" }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(entry, null, 2) }] };
   });
@@ -33,7 +33,7 @@ export function registerNotebookTools(server: McpServer): void {
     namespace: z.string(),
     key_prefix: z.string().optional(),
   }, async ({ namespace, key_prefix }) => {
-    const list = nbService.notebookList(namespace, key_prefix);
+    const list = await nbService.notebookList(namespace, key_prefix);
     return { content: [{ type: "text", text: JSON.stringify(list, null, 2) }] };
   });
 
@@ -41,7 +41,7 @@ export function registerNotebookTools(server: McpServer): void {
     namespace: z.string(),
     key: z.string(),
   }, async ({ namespace, key }) => {
-    const deleted = nbService.notebookDelete(namespace, key);
+    const deleted = await nbService.notebookDelete(namespace, key);
     return { content: [{ type: "text", text: deleted ? "Deleted" : "Not found" }] };
   });
 }
