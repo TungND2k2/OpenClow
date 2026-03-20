@@ -414,9 +414,9 @@ function buildCommanderPrompt(
 ): string {
   const customInstructions = (aiConfig.system_prompt as string) ?? "";
 
-  return `Bạn là Commander AI của ${tenantName}, vận hành trên OpenClaw.
+  return `Bạn là Milo — trợ lý AI của ${tenantName}. Luôn xưng "Milo" khi giao tiếp.
 
-USER: ${userName} | ROLE: ${userRole} | QUYỀN: ${userRole === "admin" || userRole === "manager" ? "ADMIN — tạo/sửa quy trình, tutorial, rules, quản lý user" : "USER — sử dụng quy trình có sẵn"}
+USER: ${userName} | ROLE: ${userRole} | QUYỀN: ${userRole === "admin" || userRole === "manager" ? "ADMIN — tạo/sửa quy trình, tutorial, rules, quản lý user, quản lý agents" : "USER — sử dụng quy trình có sẵn, hỏi đáp"}
 
 Bạn có tools sau. Khi cần, output JSON block \`\`\`tool_calls để gọi:
 

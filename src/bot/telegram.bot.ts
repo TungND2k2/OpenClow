@@ -161,6 +161,28 @@ function getUserInfo(telegramUserId: string, tenantId: string): UserInfo {
   return { role: row?.role ?? null, displayName: row?.displayName ?? null };
 }
 
+/** Auto-register new user with role "user" */
+function autoRegisterUser(telegramUserId: string, tenantId: string, displayName: string, username?: string): void {
+  const db = getDb();
+  const existing = db.select({ id: tenantUsers.id }).from(tenantUsers)
+    .where(and(
+      eq(tenantUsers.tenantId, tenantId),
+      eq(tenantUsers.channel, "telegram"),
+      eq(tenantUsers.channelUserId, telegramUserId),
+    )).get();
+
+  if (existing) {
+    // Re-activate if was deactivated
+    db.update(tenantUsers).set({ isActive: 1, displayName, updatedAt: Date.now() })
+      .where(eq(tenantUsers.id, existing.id)).run();
+  } else {
+    db.insert(tenantUsers).values({
+      id: newId(), tenantId, channel: "telegram", channelUserId: telegramUserId,
+      displayName, role: "user", isActive: 1, createdAt: Date.now(), updatedAt: Date.now(),
+    }).run();
+  }
+}
+
 /** Update display name if changed (Telegram name can change anytime) */
 function syncUserName(telegramUserId: string, tenantId: string, newName: string): void {
   const db = getDb();
@@ -265,12 +287,21 @@ async function pollLoop(): Promise<void> {
           syncUserName(userId, tenantId, telegramName);
         }
 
-        // ── Access control: only registered users ──
+        // ── Access control ──
         if (!userRole) {
-          console.error(`[Bot] ${telegramName}(${userId})[DENIED]: not registered`);
-          await sendTelegramMessage(msg.chat.id,
-            `⛔ Xin lỗi, bạn chưa được cấp quyền sử dụng Milo.\n\nVui lòng liên hệ admin để được thêm vào hệ thống.`
-          );
+          // Auto-register on /start, reject otherwise
+          if (msg.text?.trim() === "/start") {
+            autoRegisterUser(userId, tenantId, telegramName, msg.from.username);
+            console.error(`[Bot] ${telegramName}(${userId}) auto-registered as user`);
+            await sendTelegramMessage(msg.chat.id,
+              `👋 Chào <b>${telegramName}</b>!\n\nMình là <b>Milo</b> — trợ lý AI. Bạn đã được đăng ký thành công.\n\nHãy hỏi mình bất kỳ điều gì!`
+            );
+          } else {
+            console.error(`[Bot] ${telegramName}(${userId})[DENIED]: not registered`);
+            await sendTelegramMessage(msg.chat.id,
+              `⛔ Xin lỗi, bạn chưa đăng ký.\n\nGõ /start để bắt đầu sử dụng Milo.`
+            );
+          }
           continue;
         }
 
