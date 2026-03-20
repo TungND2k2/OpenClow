@@ -288,12 +288,21 @@ export async function startTelegramBot(): Promise<void> {
     return;
   }
 
-  try {
-    const me = await callTelegram("getMe", {});
-    console.error(`[TelegramBot] @${me.username} (${me.first_name}) — ready`);
-  } catch (e: any) {
-    console.error(`[TelegramBot] Connect failed: ${e.message}`);
-    return;
+  // Retry connection up to 5 times
+  let me: any;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      me = await callTelegram("getMe", {});
+      console.error(`[TelegramBot] @${me.username} (${me.first_name}) — ready`);
+      break;
+    } catch (e: any) {
+      console.error(`[TelegramBot] Connect attempt ${attempt}/5 failed: ${e.message}`);
+      if (attempt === 5) {
+        console.error("[TelegramBot] Giving up, will retry via poll loop");
+        me = { username: "unknown", first_name: "Bot" };
+      }
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
   }
 
   // Create queue with concurrency
