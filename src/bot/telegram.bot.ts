@@ -438,10 +438,28 @@ async function pollLoop(): Promise<void> {
               `👋 Chào <b>${telegramName}</b>!\n\nMình là <b>Milo</b> — trợ lý AI.\n\nGõ /register để đăng ký sử dụng.`
             );
           } else if (msg.text?.trim() === "/register") {
-            _registrations.set(regKey, { step: "name", telegramName, telegramUsername: msg.from.username });
-            await sendTelegramMessage(msg.chat.id,
-              `📝 <b>Đăng ký sử dụng Milo</b>\n\n👤 Nhập <b>họ và tên</b> của bạn:`
-            );
+            // Check if already pending or exists
+            const existingUser = getDb().select({ isActive: tenantUsers.isActive }).from(tenantUsers)
+              .where(and(
+                eq(tenantUsers.tenantId, tenantId),
+                eq(tenantUsers.channel, "telegram"),
+                eq(tenantUsers.channelUserId, userId),
+              )).get();
+
+            if (existingUser && existingUser.isActive === 0) {
+              await sendTelegramMessage(msg.chat.id,
+                `⏳ Bạn đã đăng ký rồi, đang chờ admin duyệt. Vui lòng đợi nhé!`
+              );
+            } else if (existingUser && existingUser.isActive === 1) {
+              await sendTelegramMessage(msg.chat.id,
+                `✅ Bạn đã có tài khoản rồi! Hãy hỏi Milo bất kỳ điều gì.`
+              );
+            } else {
+              _registrations.set(regKey, { step: "name", telegramName, telegramUsername: msg.from.username });
+              await sendTelegramMessage(msg.chat.id,
+                `📝 <b>Đăng ký sử dụng Milo</b>\n\n👤 Nhập <b>họ và tên</b> của bạn:`
+              );
+            }
           } else {
             console.error(`[Bot] ${telegramName}(${userId})[DENIED]: not registered`);
             await sendTelegramMessage(msg.chat.id,
