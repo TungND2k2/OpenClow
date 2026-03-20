@@ -258,9 +258,15 @@ export async function processWithCommander(input: {
   console.error(`[Pipeline] ─── START ───────────────────────────`);
   console.error(`[Pipeline] User: ${input.userName} (${input.userRole})`);
   console.error(`[Pipeline] Message: "${input.userMessage}"`);
-  console.error(`[Pipeline] Engine: Claude Code SDK`);
+  console.error(`[Pipeline] Engine: Hybrid (fast API + Claude CLI)`);
 
-  const systemPrompt = buildCommanderPrompt(input.tenantName, input.userName, input.userRole, input.aiConfig);
+  // Build system prompt with file context
+  const uploadedFiles = listFiles(input.tenantId, 20);
+  const fileContext = uploadedFiles.length > 0
+    ? `\n\nFILES ĐÃ UPLOAD (dùng read_file_content để đọc nội dung):\n${uploadedFiles.map((f: any) => `• ${f.fileName} (ID: ${f.id}, ${f.mimeType})`).join("\n")}\n\nKhi user hỏi về nội dung file/cẩm nang/tài liệu → PHẢI gọi read_file_content(file_id) để đọc rồi trả lời dựa trên nội dung thực tế, KHÔNG tự bịa.`
+    : "";
+
+  const systemPrompt = buildCommanderPrompt(input.tenantName, input.userName, input.userRole, input.aiConfig) + fileContext;
 
   try {
     const result = await processMessage({
