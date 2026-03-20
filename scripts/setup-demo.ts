@@ -119,18 +119,8 @@ db.insert(workflowTemplates).values({
 }).run();
 console.log(`✅ Workflow: ${tmplId} (Tạo Đơn Hàng)`);
 
-// 5. Create agents
-try {
-  const cmdr = registerAgent({ name: "OpenClaw Commander", capabilities: ["orchestration", "analysis"], role: "commander" });
-  heartbeat(cmdr.id);
-  console.log(`✅ Commander: ${cmdr.id}`);
-} catch (e: any) {
-  console.log(`⏭️  Commander already exists`);
-}
-
-const salesBot = registerAgent({ name: "Sales Bot", capabilities: ["form-collection", "workflow-engine"], role: "specialist" });
-heartbeat(salesBot.id);
-console.log(`✅ Sales Bot: ${salesBot.id}`);
+// 5. Agents — created automatically by agent-pool on startup
+console.log(`⏭️  Agents will be created by agent-pool on startup`);
 
 // 6. Create admin user in DB (Telegram ID from env or arg)
 const adminTelegramId = process.argv[2] ?? "1963992425";

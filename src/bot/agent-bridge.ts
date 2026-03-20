@@ -1,14 +1,13 @@
 /**
  * Agent Bridge — connects Telegram to the FULL OpenClaw agent system.
  *
- * Pipeline:
- * 1. Create Task in OpenClaw
+ * Pipeline (using REAL agents, not direct LLM calls):
+ * 1. Create Task in DB (with valid FK to Commander agent)
  * 2. Check Knowledge Base (learned from past interactions)
- * 3. If knowledge found → use it, skip LLM for simple queries
- * 4. If not → call LLM with tools
- * 5. Execute tools (DB operations)
- * 6. After response → extract knowledge, save for future
- * 7. Update task status, agent performance
+ * 3. Commander agent thinks (Claude SDK or fast API)
+ * 4. Commander calls tools → executes via tool registry
+ * 5. After response → extract knowledge (self-learning)
+ * 6. Update agent performance + task status
  */
 
 import { getDb } from "../db/connection.js";
@@ -19,18 +18,21 @@ import { getDashboard } from "../modules/monitoring/monitor.service.js";
 import { startWorkflow } from "../modules/workflows/workflow-engine.service.js";
 import { getFile, listFiles, readFileContent } from "../modules/storage/s3.service.js";
 import { getQueueMetrics } from "./telegram.bot.js";
+import { createTask, assignTask, startTask, completeTask, failTask } from "../modules/tasks/task.service.js";
 import { recordDecision } from "../modules/decisions/decision.service.js";
+import { updatePerformance, heartbeat } from "../modules/agents/agent.service.js";
+import { getCommander } from "../modules/agents/agent-pool.js";
+import { AgentRunner } from "../modules/agents/agent-runner.js";
 import {
   workflowTemplates, formTemplates, businessRules,
   tenantUsers,
 } from "../db/schema.js";
 import { newId } from "../utils/id.js";
 import { nowMs } from "../utils/clock.js";
-import { processMessage } from "./llm-client.js";
 
-// ── Execute tool calls ───────────────────────────────────────
+// ── Tool Registry ─────────────────────────────────────────────
 
-async function executeTool(tool: string, args: Record<string, unknown>, tenantId: string): Promise<unknown> {
+export async function executeTool(tool: string, args: Record<string, unknown>, tenantId: string): Promise<unknown> {
   const db = getDb();
   const now = nowMs();
 
@@ -78,10 +80,11 @@ async function executeTool(tool: string, args: Record<string, unknown>, tenantId
     }
 
     case "save_tutorial": {
+      const commander = getCommander();
       storeKnowledge({
         type: "procedure", title: args.title as string, content: args.content as string,
         domain: (args.domain as string) ?? "general", tags: ["tutorial", (args.target_role as string) ?? "general"],
-        sourceAgentId: "system", scope: `domain:${(args.target_role as string) ?? "general"}`,
+        sourceAgentId: commander?.agent.id ?? "system", scope: `domain:${(args.target_role as string) ?? "general"}`,
       });
       notebookWrite({
         namespace: `tutorial:${tenantId}`, key: (args.title as string).toLowerCase().replace(/\s+/g, "-"),
@@ -91,10 +94,11 @@ async function executeTool(tool: string, args: Record<string, unknown>, tenantId
     }
 
     case "save_knowledge": {
+      const commander = getCommander();
       const entry = storeKnowledge({
         type: (args.type as any) ?? "domain_knowledge", title: args.title as string,
         content: args.content as string, domain: (args.domain as string) ?? "general",
-        tags: (args.tags as string[]) ?? [], sourceAgentId: "system",
+        tags: (args.tags as string[]) ?? [], sourceAgentId: commander?.agent.id ?? "system",
       });
       return { id: entry.id, title: entry.title };
     }
@@ -170,7 +174,7 @@ async function executeTool(tool: string, args: Record<string, unknown>, tenantId
   }
 }
 
-// ── Commander Pipeline (uses full agent system) ──────────────
+// ── Commander Pipeline ──────────────────────────────────────
 
 export interface CommanderResponse {
   text: string;
@@ -194,11 +198,33 @@ export async function processWithCommander(input: {
   console.error(`[Pipeline] User: ${input.userName} (${input.userRole})`);
   console.error(`[Pipeline] Message: "${input.userMessage}"`);
 
-  // ── Step 1: Track interaction ────────────────────────────────
-  const interactionId = newId();
-  console.error(`[Pipeline] Interaction: ${interactionId}`);
+  // ── Get Commander agent ──────────────────────────────────
+  const commander = getCommander();
+  if (!commander) {
+    return { text: "⚠️ Commander agent chưa khởi tạo. Restart hệ thống.", files: [] };
+  }
 
-  // ── Step 2: Query Knowledge Base ───────────────────────────
+  const commanderAgentId = commander.agent.id;
+  heartbeat(commanderAgentId);
+
+  // ── Step 1: Create Task (valid FK to Commander) ──────────
+  let task;
+  try {
+    task = createTask({
+      title: `Chat: ${input.userMessage.substring(0, 50)}`,
+      description: input.userMessage,
+      tags: ["chat", "telegram"],
+      createdByAgentId: commanderAgentId,
+    });
+    assignTask(task.id, commanderAgentId, commanderAgentId);
+    startTask(task.id, commanderAgentId);
+    console.error(`[Pipeline] Task: ${task.id} → Commander (${commander.agent.name})`);
+  } catch (taskErr: any) {
+    console.error(`[Pipeline] Task creation skipped: ${taskErr.message}`);
+    task = null;
+  }
+
+  // ── Step 2: Query Knowledge Base ─────────────────────────
   const keywords = input.userMessage.toLowerCase().split(/\s+/).filter(w => w.length > 2);
   const knowledge = retrieveKnowledge({
     tags: keywords,
@@ -210,69 +236,87 @@ export async function processWithCommander(input: {
 
   let knowledgeContext = "";
   if (knowledge.length > 0 && knowledge[0].matchScore > 0.3) {
-    console.error(`[Pipeline] Knowledge found: ${knowledge.length} entries (top score: ${knowledge[0].matchScore.toFixed(2)})`);
-    knowledgeContext = `\n\nKNOWLEDGE BASE (thông tin đã học, ưu tiên dùng nếu liên quan):\n${knowledge.map(k => `[${k.type}] ${k.title}: ${k.content.substring(0, 300)}`).join("\n\n")}`;
+    console.error(`[Pipeline] Knowledge: ${knowledge.length} entries (top: ${knowledge[0].matchScore.toFixed(2)})`);
+    knowledgeContext = `\n\nKNOWLEDGE BASE (đã học, ưu tiên dùng):\n${knowledge.map(k => `[${k.type}] ${k.title}: ${k.content.substring(0, 300)}`).join("\n\n")}`;
   } else {
-    console.error(`[Pipeline] No relevant knowledge found`);
+    console.error(`[Pipeline] Knowledge: none`);
   }
 
-  // ── Step 3: Build context with files + knowledge ───────────
+  // ── Step 3: Build context ────────────────────────────────
   const uploadedFiles = listFiles(input.tenantId, 20);
   const fileContext = uploadedFiles.length > 0
-    ? `\n\nFILES ĐÃ UPLOAD:\n${uploadedFiles.map((f: any) => `• ${f.fileName} (ID: ${f.id})`).join("\n")}\nKhi user hỏi về nội dung file/cẩm nang/tài liệu → gọi read_file_content(file_id) để đọc, KHÔNG tự bịa.`
+    ? `\n\nFILES ĐÃ UPLOAD:\n${uploadedFiles.map((f: any) => `• ${f.fileName} (ID: ${f.id})`).join("\n")}\nKhi user hỏi về file/cẩm nang/tài liệu → gọi read_file_content(file_id) để đọc.`
     : "";
 
   const systemPrompt = buildCommanderPrompt(input.tenantName, input.userName, input.userRole, input.aiConfig) + knowledgeContext + fileContext;
 
-  // ── Step 4: Call LLM with tools ────────────────────────────
+  // ── Step 4: Commander THINKS ─────────────────────────────
+  // Create a per-request runner with the right context + tool executor
+  const runner = new AgentRunner({
+    agent: commander.agent,
+    engine: commander.engine,
+    tools: [],
+    systemPrompt,
+    executeTool: async (tool, args) => {
+      const toolResult = await executeTool(tool, args, input.tenantId);
+      if (toolResult && typeof toolResult === "object" && (toolResult as any).__send_file__) {
+        _files.push({ url: (toolResult as any).url, fileName: (toolResult as any).fileName, mimeType: (toolResult as any).mimeType });
+      }
+      return toolResult;
+    },
+    maxToolLoops: 5,
+  });
+
   try {
-    const result = await processMessage({
-      userMessage: input.userMessage,
-      systemPrompt,
-      conversationHistory: input.conversationHistory,
-      executeTool: async (tool, args) => {
-        console.error(`[Pipeline] Tool: ${tool}`);
-        const toolResult = await executeTool(tool, args, input.tenantId);
+    const result = await runner.think(input.userMessage, input.conversationHistory);
 
-        if (toolResult && typeof toolResult === "object" && (toolResult as any).__send_file__) {
-          _files.push({ url: (toolResult as any).url, fileName: (toolResult as any).fileName, mimeType: (toolResult as any).mimeType });
-        }
-        return toolResult;
-      },
-    });
+    // ── Step 5: Complete task + update performance ──────────
+    if (task) {
+      try {
+        completeTask(task.id, commanderAgentId, result.text.substring(0, 200));
+      } catch {}
+    }
+    updatePerformance(commanderAgentId, true);
 
-    // ── Step 5: Extract & save knowledge (self-learning) ──────
-    if (result.toolResults.length > 0) {
-      const toolNames = result.toolResults.map(t => t.tool).join(", ");
+    // ── Step 6: Self-learning ──────────────────────────────
+    if (result.toolCalls.length > 0) {
+      const toolNames = result.toolCalls.map(t => t.tool).join(", ");
       try {
         storeKnowledge({
           type: "best_practice",
           title: `Q: ${input.userMessage.substring(0, 80)}`,
           content: `User: "${input.userMessage}"\nTools: ${toolNames}\nAnswer: ${result.text.substring(0, 500)}`,
           domain: "general",
-          tags: [...keywords.slice(0, 5), ...result.toolResults.map(t => t.tool)],
-          sourceAgentId: "system",
+          tags: [...keywords.slice(0, 5), ...result.toolCalls.map(t => t.tool)],
+          sourceAgentId: commanderAgentId,
+          sourceTaskId: task?.id,
           outcome: "success",
         });
         console.error(`[Pipeline] ✓ Knowledge saved (${toolNames})`);
       } catch (ke: any) {
-        console.error(`[Pipeline] Knowledge save failed: ${ke.message}`);
+        console.error(`[Pipeline] Knowledge save warn: ${ke.message}`);
       }
     }
 
-    // Record decision (audit)
+    // ── Step 7: Audit ──────────────────────────────────────
     recordDecision({
-      agentId: "system",
+      agentId: commanderAgentId,
       decisionType: "assign",
-      reasoning: `Chat: "${input.userMessage.substring(0, 60)}". Tools: ${result.toolResults.map(t => t.tool).join(", ") || "none"}. Knowledge hits: ${knowledge.length}.`,
+      taskId: task?.id,
+      reasoning: `Chat: "${input.userMessage.substring(0, 60)}". Tools: ${result.toolCalls.map(t => t.tool).join(", ") || "none"}. Knowledge: ${knowledge.length}.`,
     });
 
     const elapsed = Date.now() - startTime;
-    console.error(`[Pipeline] ─── END (${elapsed}ms) ────────────`);
+    console.error(`[Pipeline] ─── END (${elapsed}ms, ${result.toolCalls.length} tools) ────────────`);
 
     return { text: result.text, files: _files };
   } catch (e: any) {
-    // Save failure as anti-pattern knowledge
+    // ── Error handling ──────────────────────────────────────
+    if (task) {
+      try { failTask(task.id, commanderAgentId, e.message); } catch {}
+    }
+    updatePerformance(commanderAgentId, false);
+
     try {
       storeKnowledge({
         type: "anti_pattern",
@@ -280,7 +324,7 @@ export async function processWithCommander(input: {
         content: `Error: ${e.message}`,
         domain: "general",
         tags: keywords.slice(0, 5),
-        sourceAgentId: "system",
+        sourceAgentId: commanderAgentId,
         outcome: "failure",
       });
     } catch {}
@@ -290,7 +334,7 @@ export async function processWithCommander(input: {
   }
 }
 
-// ── System prompt ────────────────────────────────────────────
+// ── System Prompt ────────────────────────────────────────────
 
 function buildCommanderPrompt(
   tenantName: string, userName: string, userRole: string,
