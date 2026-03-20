@@ -188,12 +188,15 @@ export class AgentRunner {
     const { promisify } = await import("util");
     const execFileAsync = promisify(execFile);
 
+    // Include system prompt in the prompt itself so CLI has full context
+    const fullPrompt = `${this.systemPrompt}\n\n---\n\nUser message: ${prompt}`;
+
     try {
       const { stdout } = await execFileAsync("claude", [
         "--print",
         "--output-format", "text",
         "--max-turns", "1",
-        "-p", prompt,
+        "-p", fullPrompt,
       ], { timeout: 120_000, maxBuffer: 1024 * 1024, cwd: "/tmp", env: { ...process.env, HOME: process.env.HOME ?? "/root" } });
       return stdout.trim() || "Không có phản hồi.";
     } catch (e: any) {
