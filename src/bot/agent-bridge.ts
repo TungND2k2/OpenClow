@@ -170,6 +170,57 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
         .from(tenantUsers).where(eq(tenantUsers.tenantId, tenantId)).all();
     }
 
+    // ── Agent Management Tools ───────────────────────────────
+
+    case "create_agent_template": {
+      const { createTemplate: ct } = await import("../modules/agents/template.service.js");
+      const tmpl = ct({
+        name: args.name as string,
+        role: args.role as any,
+        systemPrompt: args.system_prompt as string,
+        capabilities: (args.capabilities as string[]) ?? [],
+        tools: (args.tools as string[]) ?? [],
+        engine: (args.engine as any) ?? "fast-api",
+        maxConcurrentTasks: (args.max_concurrent_tasks as number) ?? 1,
+        autoSpawn: false,
+      });
+      return { id: tmpl.id, name: tmpl.name, role: tmpl.role };
+    }
+
+    case "list_agent_templates": {
+      const { listTemplates: lt } = await import("../modules/agents/template.service.js");
+      return lt({ role: args.role as string, status: (args.status as string) ?? "active" })
+        .map(t => ({ id: t.id, name: t.name, role: t.role, engine: t.engine, autoSpawn: t.autoSpawn, status: t.status }));
+    }
+
+    case "spawn_agent": {
+      const { agentPool: pool } = await import("../modules/agents/agent-pool.js");
+      const spawned = pool.spawnAgent(
+        args.template_id as string,
+        args.template_name as string,
+        args.parent_agent_id as string,
+        (args.count as number) ?? 1,
+      );
+      return spawned.map(r => ({ id: r.agent.id, name: r.agent.name, role: r.agent.role }));
+    }
+
+    case "kill_agent": {
+      const { agentPool: pool } = await import("../modules/agents/agent-pool.js");
+      pool.killAgent(args.agent_id as string);
+      return { killed: true, agent_id: args.agent_id };
+    }
+
+    case "list_agents": {
+      const { listAgents: la } = await import("../modules/agents/agent.service.js");
+      return la()
+        .filter(a => {
+          if (args.role && a.role !== args.role) return false;
+          if (args.status && a.status !== args.status) return false;
+          return a.status !== "deactivated";
+        })
+        .map(a => ({ id: a.id, name: a.name, role: a.role, status: a.status, templateId: a.templateId, performance: a.performanceScore, tasksCompleted: a.tasksCompleted }));
+    }
+
     default: return { error: `Unknown tool: ${tool}` };
   }
 }
@@ -369,7 +420,7 @@ USER: ${userName} | ROLE: ${userRole} | QUYỀN: ${userRole === "admin" || userR
 
 Bạn có tools sau. Khi cần, output JSON block \`\`\`tool_calls để gọi:
 
-Tools:
+Tools — Business:
 1. list_workflows() — Xem danh sách quy trình
 2. create_workflow(name, description, domain, stages[{id,name,type}]) — Tạo quy trình
 3. create_form(name, fields[{id,label,type,required}]) — Tạo form
@@ -384,6 +435,13 @@ Tools:
 12. set_user_role(channel, channel_user_id, role) — Đổi role
 13. get_dashboard() — Dashboard hệ thống
 14. search_knowledge(domain?, tags?) — Tìm knowledge đã học
+
+Tools — Agent Management (ADMIN only):
+15. create_agent_template(name, role, system_prompt, capabilities[], tools[], engine?) — Tạo template agent mới
+16. list_agent_templates(role?, status?) — Xem templates
+17. spawn_agent(template_id?, template_name?, count?) — Tạo agent từ template
+18. kill_agent(agent_id) — Tắt agent
+19. list_agents(role?, status?) — Xem agents đang chạy
 
 Cách gọi tool:
 \`\`\`tool_calls

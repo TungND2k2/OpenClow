@@ -8,13 +8,46 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 // ============================================================
-// agents
+// agent_templates — "job descriptions" for spawning agents
+// ============================================================
+export const agentTemplates = sqliteTable(
+  "agent_templates",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull().unique(),
+    role: text("role", {
+      enum: ["commander", "supervisor", "specialist", "worker"],
+    }).notNull(),
+    systemPrompt: text("system_prompt").notNull(),
+    capabilities: text("capabilities", { mode: "json" }).notNull().default("[]"),
+    tools: text("tools", { mode: "json" }).notNull().default("[]"), // empty = all tools
+    engine: text("engine", {
+      enum: ["claude-sdk", "fast-api"],
+    }).notNull().default("fast-api"),
+    maxConcurrentTasks: integer("max_concurrent_tasks").notNull().default(1),
+    maxToolLoops: integer("max_tool_loops").notNull().default(5),
+    costBudgetUsd: real("cost_budget_usd"),
+    autoSpawn: integer("auto_spawn").notNull().default(0), // 1 = spawn on startup
+    autoSpawnCount: integer("auto_spawn_count").notNull().default(1),
+    status: text("status", { enum: ["active", "archived"] }).notNull().default("active"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    index("idx_templates_role").on(table.role),
+    index("idx_templates_status").on(table.status),
+  ]
+);
+
+// ============================================================
+// agents — instances spawned from templates
 // ============================================================
 export const agents = sqliteTable(
   "agents",
   {
     id: text("id").primaryKey(),
     name: text("name").notNull(),
+    templateId: text("template_id").references(() => agentTemplates.id),
     role: text("role", {
       enum: ["commander", "supervisor", "specialist", "worker"],
     }).notNull(),
@@ -52,6 +85,7 @@ export const agents = sqliteTable(
     index("idx_agents_status").on(table.status),
     index("idx_agents_role").on(table.role),
     index("idx_agents_parent").on(table.parentAgentId),
+    index("idx_agents_template").on(table.templateId),
   ]
 );
 

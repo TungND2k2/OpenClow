@@ -17,11 +17,13 @@ export interface CreateAgentInput {
   maxConcurrentTasks?: number;
   costBudgetUsd?: number;
   config?: Record<string, unknown>;
+  templateId?: string;
 }
 
 export interface AgentRecord {
   id: string;
   name: string;
+  templateId: string | null;
   role: Role;
   authorityLevel: number;
   capabilities: string[];
@@ -65,6 +67,7 @@ export function registerAgent(input: CreateAgentInput): AgentRecord {
   const record = {
     id,
     name: input.name,
+    templateId: input.templateId ?? null,
     role,
     authorityLevel,
     capabilities: JSON.stringify(input.capabilities),
