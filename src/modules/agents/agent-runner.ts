@@ -151,24 +151,48 @@ export class AgentRunner {
     userMessage: string,
     history: { role: string; content: string }[],
   ): Promise<string> {
-    const { query } = await import("@anthropic-ai/claude-code");
-
     const prompt = this.buildPromptWithHistory(userMessage, history);
 
-    const messages: { role: "user" | "assistant"; content: string }[] = [];
-    let resultText = "";
-
-    for await (const msg of query({
-      prompt,
-      systemPrompt: this.systemPrompt,
-      options: { maxTurns: 1 },
-    })) {
-      if (msg.type === "text") {
-        resultText += msg.content;
+    try {
+      // Try SDK import (works when @anthropic-ai/claude-code is installed locally)
+      const { query } = await import("@anthropic-ai/claude-code");
+      let resultText = "";
+      for await (const msg of query({
+        prompt,
+        systemPrompt: this.systemPrompt,
+        options: { maxTurns: 1 },
+      })) {
+        if (msg.type === "text") {
+          resultText += msg.content;
+        }
       }
+      return resultText || "Không có phản hồi.";
+    } catch {
+      // Fallback: call claude CLI directly (global install)
+      console.error(`[Agent:${this.agent.name}] SDK import failed, using CLI fallback`);
+      return this.callClaudeCLI(prompt);
     }
+  }
 
-    return resultText || "Không có phản hồi.";
+  /**
+   * Fallback: call `claude` CLI as subprocess.
+   */
+  private async callClaudeCLI(prompt: string): Promise<string> {
+    const { execFile } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFileAsync = promisify(execFile);
+
+    try {
+      const { stdout } = await execFileAsync("claude", [
+        "--print",
+        "--output-format", "text",
+        "--max-turns", "1",
+        "-p", prompt,
+      ], { timeout: 120_000, maxBuffer: 1024 * 1024 });
+      return stdout.trim() || "Không có phản hồi.";
+    } catch (e: any) {
+      throw new Error(`Claude CLI failed: ${e.message}`);
+    }
   }
 
   /**
