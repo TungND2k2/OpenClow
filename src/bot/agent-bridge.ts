@@ -449,21 +449,24 @@ export async function processWithCommander(input: {
     }
     await updatePerformance(commanderAgentId, true);
 
-    // ── Step 6: Self-learning ──────────────────────────────
+    // ── Step 6: Self-learning (rules only, NOT raw data) ───
     if (result.toolCalls.length > 0) {
       const toolNames = result.toolCalls.map(t => t.tool).join(", ");
+      // Extract RULE/PATTERN, not cache response data
+      const intentKeywords = keywords.slice(0, 3).join(" ");
+      const rule = `Khi user hỏi về "${intentKeywords}" → gọi tools: ${toolNames}`;
       try {
         await storeKnowledge({
           type: "best_practice",
-          title: `Q: ${input.userMessage.substring(0, 80)}`,
-          content: `User: "${input.userMessage}"\nTools: ${toolNames}\nAnswer: ${result.text.substring(0, 500)}`,
+          title: `Rule: ${intentKeywords} → ${toolNames}`,
+          content: rule,
           domain: "general",
           tags: [...keywords.slice(0, 5), ...result.toolCalls.map(t => t.tool)],
           sourceAgentId: commanderAgentId,
           sourceTaskId: task?.id,
           outcome: "success",
         });
-        console.error(`[Pipeline] ✓ Knowledge saved (${toolNames})`);
+        console.error(`[Pipeline] ✓ Rule saved: ${rule}`);
       } catch (ke: any) {
         console.error(`[Pipeline] Knowledge save warn: ${ke.message}`);
       }
@@ -488,11 +491,13 @@ export async function processWithCommander(input: {
     }
     await updatePerformance(commanderAgentId, false);
 
+    // Save anti-pattern rule (what NOT to do)
     try {
+      const intentKeywords = keywords.slice(0, 3).join(" ");
       await storeKnowledge({
         type: "anti_pattern",
-        title: `Failed: ${input.userMessage.substring(0, 80)}`,
-        content: `Error: ${e.message}`,
+        title: `Anti-pattern: ${intentKeywords}`,
+        content: `Khi user hỏi "${intentKeywords}" → TRÁNH: ${e.message.substring(0, 100)}. Cần kiểm tra lại cách gọi tool.`,
         domain: "general",
         tags: keywords.slice(0, 5),
         sourceAgentId: commanderAgentId,
