@@ -18,7 +18,7 @@ export type LLMEngine = "fast-api" | "claude-cli";
 
 // ── Semaphore — limit concurrent Claude CLI processes ────────
 
-const MAX_CONCURRENT_CLI = 2; // 5.8GB RAM, each CLI ~150MB
+const MAX_CONCURRENT_CLI = 5; // 5.8GB RAM, each CLI ~150MB, 5x = ~750MB
 let _cliRunning = 0;
 const _cliQueue: (() => void)[] = [];
 
