@@ -325,9 +325,22 @@ async function handleJob(job: QueueJob): Promise<void> {
     await sendTelegramMessage(job.chatId, formattedText);
   }
 
-  // Send files if any
+  // Send files from tool calls
   for (const file of response.files) {
     await sendTelegramFile(job.chatId, file.url, file.fileName);
+  }
+
+  // Auto-detect S3 image/file URLs in response text → send as media
+  const s3UrlRegex = /https?:\/\/s3\.[^\s)]+\.(jpg|jpeg|png|gif|webp|pdf|docx|xlsx)/gi;
+  const s3Urls = response.text.match(s3UrlRegex) ?? [];
+  for (const url of s3Urls) {
+    const ext = url.split(".").pop()?.toLowerCase() ?? "";
+    const fname = url.split("/").pop() ?? "file";
+    if (["jpg", "jpeg", "png", "gif", "webp"].includes(ext)) {
+      try { await callTelegram("sendPhoto", { chat_id: job.chatId, photo: url }); } catch {}
+    } else {
+      try { await sendTelegramFile(job.chatId, url, fname); } catch {}
+    }
   }
 }
 
