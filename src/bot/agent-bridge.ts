@@ -450,7 +450,14 @@ function buildCommanderPrompt(
   const botIntro = cfg.bot_intro ?? "trợ lý AI";
   const rolePerms = cfg.role_permissions ?? {};
   const userPermissions = rolePerms[userRole] ?? `${userRole.toUpperCase()}`;
-  const rules = (cfg.rules as string[]) ?? [];
+  const defaultRules = [
+    "TUYỆT ĐỐI KHÔNG tự bịa/hallucinate data. Chỉ trả lời dựa trên data thật từ tools hoặc knowledge base",
+    "Khi user hỏi về file/cẩm nang/tài liệu → PHẢI gọi list_files rồi read_file_content trước khi trả lời",
+    "Khi user hỏi về đơn hàng/dữ liệu → gọi tool để query, KHÔNG tự bịa mã đơn hay số liệu",
+    "KHÔNG tự tạo URL. Khi cần gửi file/ảnh → gọi tool send_file(file_id)",
+    "Ngắn gọn, thực tế, đúng trọng tâm câu hỏi",
+  ];
+  const rules = [...defaultRules, ...((cfg.rules as string[]) ?? [])];
   const customInstructions = (cfg.custom_instructions as string) ?? "";
 
   // Build tool instructions from DB config
