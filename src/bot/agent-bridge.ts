@@ -147,6 +147,57 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
       return { __send_file__: true, url: file.s3Url, fileName: file.fileName, mimeType: file.mimeType };
     }
 
+    case "analyze_image": {
+      // Download image from S3 → save temp → call Claude CLI with --image
+      let fileId = args.file_id as string;
+      if (fileId && !fileId.startsWith("01")) {
+        const allFiles = await listFiles(tenantId, 50);
+        const match = allFiles.find((f: any) => f.fileName.toLowerCase().includes(fileId.toLowerCase()));
+        if (match) fileId = match.id;
+      }
+      const file = await getFile(fileId);
+      if (!file) return { error: "File not found" };
+      if (!file.mimeType?.startsWith("image/")) return { error: "Not an image file" };
+
+      try {
+        const { S3Client, GetObjectCommand } = await import("@aws-sdk/client-s3");
+        const { getConfig: gc } = await import("../config.js");
+        const cfg = gc();
+        const s3 = new S3Client({
+          region: cfg.S3_REGION!, endpoint: cfg.S3_ENDPOINT!,
+          credentials: { accessKeyId: cfg.S3_ACCESS_KEY!, secretAccessKey: cfg.S3_SECRET_KEY! },
+          forcePathStyle: true,
+        });
+        const obj = await s3.send(new GetObjectCommand({ Bucket: cfg.S3_BUCKET!, Key: file.s3Key }));
+        const chunks: Buffer[] = [];
+        for await (const chunk of obj.Body as any) chunks.push(chunk);
+        const buffer = Buffer.concat(chunks);
+
+        const { writeFileSync, unlinkSync } = await import("fs");
+        const ext = file.fileName.split(".").pop() ?? "jpg";
+        const tmpPath = `/tmp/img_${Date.now()}.${ext}`;
+        writeFileSync(tmpPath, buffer);
+
+        // Call Claude CLI with image
+        const { execFile } = await import("child_process");
+        const { promisify } = await import("util");
+        const execFileAsync = promisify(execFile);
+
+        const prompt = (args.prompt as string) ?? "Mô tả chi tiết nội dung ảnh này. Nếu là sản phẩm thì mô tả màu sắc, kiểu dáng, chất liệu. Nếu là tài liệu/invoice thì trích xuất thông tin quan trọng.";
+
+        const { stdout } = await execFileAsync(
+          "claude",
+          ["--print", "--output-format", "text", "--max-turns", "1", "-p", prompt, "--image", tmpPath],
+          { encoding: "utf-8", timeout: 60_000, cwd: "/tmp", maxBuffer: 10 * 1024 * 1024 },
+        );
+
+        try { unlinkSync(tmpPath); } catch {}
+        return { fileName: file.fileName, analysis: (stdout ?? "").trim() };
+      } catch (err: any) {
+        return { error: `Vision failed: ${err.message}` };
+      }
+    }
+
     case "list_files": return await listFiles(tenantId, (args.limit as number) ?? 20);
     case "get_file": return await getFile(args.file_id as string);
 
