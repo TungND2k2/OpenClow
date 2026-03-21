@@ -13,6 +13,7 @@ import { getConfig } from "../config.js";
 import { processWithCommander, type CommanderResponse } from "./agent-bridge.js";
 import { MessageQueue, type QueueJob } from "./message-queue.js";
 import { getOrCreateSession, appendMessage } from "../modules/conversations/conversation.service.js";
+import { listFiles } from "../modules/storage/s3.service.js";
 import { getTenant } from "../modules/tenants/tenant.service.js";
 import { getDb } from "../db/connection.js";
 import { tenantUsers } from "../db/schema.js";
@@ -330,16 +331,20 @@ async function handleJob(job: QueueJob): Promise<void> {
     await sendTelegramFile(job.chatId, file.url, file.fileName);
   }
 
-  // Auto-detect S3 image/file URLs in response text → send as media
-  const s3UrlRegex = /https?:\/\/s3\.[^\s)]+\.(jpg|jpeg|png|gif|webp|pdf|docx|xlsx)/gi;
-  const s3Urls = response.text.match(s3UrlRegex) ?? [];
-  for (const url of s3Urls) {
-    const ext = url.split(".").pop()?.toLowerCase() ?? "";
-    const fname = url.split("/").pop() ?? "file";
-    if (["jpg", "jpeg", "png", "gif", "webp"].includes(ext)) {
-      try { await callTelegram("sendPhoto", { chat_id: job.chatId, photo: url }); } catch {}
-    } else {
-      try { await sendTelegramFile(job.chatId, url, fname); } catch {}
+  // Auto-send uploaded images mentioned in response
+  // Instead of relying on LLM-generated URLs (often malformed),
+  // check if response mentions any uploaded file names → send from S3
+  const uploadedFiles = await listFiles(job.tenantId, 20);
+  for (const file of uploadedFiles) {
+    const fname = (file as any).fileName?.toLowerCase() ?? "";
+    const responseText = response.text.toLowerCase();
+    const isImage = /\.(jpg|jpeg|png|gif|webp)$/.test(fname);
+    // If response mentions this file (by name or "ảnh" + file context) → send it
+    const nameWithoutExt = fname.replace(/\.[^.]+$/, "").replace(/_/g, " ");
+    if (isImage && (responseText.includes(nameWithoutExt) || responseText.includes(fname) || responseText.includes((file as any).s3Url))) {
+      try {
+        await callTelegram("sendPhoto", { chat_id: job.chatId, photo: (file as any).s3Url });
+      } catch {}
     }
   }
 }
