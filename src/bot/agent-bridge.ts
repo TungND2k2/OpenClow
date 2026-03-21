@@ -293,7 +293,22 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
         if (!col) return { error: `Collection "${args.collection ?? args.collection_id}" không tồn tại` };
         collectionId = col.id;
       }
-      return await listRows(collectionId, (args.limit as number) ?? 50);
+      const rows = await listRows(collectionId, (args.limit as number) ?? 50);
+
+      // Auto-resolve file names → S3 URLs
+      const allFiles = await listFiles(tenantId, 100);
+      for (const row of rows) {
+        const data = row.data as Record<string, unknown>;
+        for (const [key, value] of Object.entries(data)) {
+          if (typeof value === "string" && /\.(jpg|jpeg|png|gif|webp|pdf|docx)$/i.test(value)) {
+            const match = allFiles.find((f: any) => f.fileName === value);
+            if (match) {
+              data[key] = (match as any).s3Url;
+            }
+          }
+        }
+      }
+      return rows;
     }
 
     case "update_row": {
