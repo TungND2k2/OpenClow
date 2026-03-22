@@ -396,6 +396,11 @@ async function processUpdate(
         const userRole = userInfo.role;
         const userName = userInfo.displayName ?? telegramName;
 
+        // Get bot name from tenant config (not hardcoded)
+        const tenant = await getTenant(tenantId);
+        const aiCfg = (tenant?.aiConfig ?? {}) as any;
+        const botName = aiCfg.bot_name ?? tenant?.name ?? "Bot";
+
         // Sync Telegram name to DB (if registered)
         if (userRole && userInfo.displayName !== telegramName) {
           await syncUserName(userId, tenantId, telegramName);
@@ -443,7 +448,7 @@ async function processUpdate(
               _registrations.delete(regKey);
 
               await sendTelegramMessage(msg.chat.id,
-                `✅ Đã gửi yêu cầu đăng ký!\n\nVui lòng chờ admin duyệt. Milo sẽ thông báo khi tài khoản được kích hoạt.`
+                `✅ Đã gửi yêu cầu đăng ký!\n\nVui lòng chờ admin duyệt. ${botName} sẽ thông báo khi tài khoản được kích hoạt.`
               );
 
               // Notify all admins
@@ -471,7 +476,7 @@ async function processUpdate(
         if (!userRole) {
           if (msg.text?.trim() === "/start") {
             await sendTelegramMessage(msg.chat.id,
-              `👋 Chào <b>${telegramName}</b>!\n\nMình là <b>Milo</b> — trợ lý AI.\n\nGõ /register để đăng ký sử dụng.`
+              `👋 Chào <b>${telegramName}</b>!\n\nMình là <b>${botName}</b> — trợ lý AI.\n\nGõ /register để đăng ký sử dụng.`
             );
           } else if (msg.text?.trim() === "/register") {
             // Check if already pending or exists
@@ -488,12 +493,12 @@ async function processUpdate(
               );
             } else if (existingUser && existingUser.isActive === true) {
               await sendTelegramMessage(msg.chat.id,
-                `✅ Bạn đã có tài khoản rồi! Hãy hỏi Milo bất kỳ điều gì.`
+                `✅ Bạn đã có tài khoản rồi! Hãy hỏi ${botName} bất kỳ điều gì.`
               );
             } else {
               _registrations.set(regKey, { step: "name", telegramName, telegramUsername: msg.from.username });
               await sendTelegramMessage(msg.chat.id,
-                `📝 <b>Đăng ký sử dụng Milo</b>\n\n👤 Nhập <b>họ và tên</b> của bạn:`
+                `📝 <b>Đăng ký sử dụng ${botName}</b>\n\n👤 Nhập <b>họ và tên</b> của bạn:`
               );
             }
           } else {
@@ -514,7 +519,7 @@ async function processUpdate(
               await sendTelegramMessage(msg.chat.id, `✅ Đã duyệt user ${targetId}`);
               // Notify the approved user
               await sendTelegramMessage(targetId,
-                `🎉 <b>Tài khoản đã được duyệt!</b>\n\nChào mừng bạn đến với Milo. Hãy hỏi mình bất kỳ điều gì!`
+                `🎉 <b>Tài khoản đã được duyệt!</b>\n\nChào mừng bạn! Hãy hỏi ${botName} bất kỳ điều gì.`
               );
             } else {
               await sendTelegramMessage(msg.chat.id, `❌ Không tìm thấy user ${targetId}`);

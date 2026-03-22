@@ -455,7 +455,6 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
       }
 
       // Execute query
-      const { sql } = await import("drizzle-orm");
       const tableMap: Record<string, any> = {
         form_templates: (await import("../db/schema.js")).formTemplates,
         workflow_templates: (await import("../db/schema.js")).workflowTemplates,
@@ -812,7 +811,7 @@ function buildCommanderPrompt(
   aiConfig: Record<string, unknown>
 ): string {
   const cfg = aiConfig as any;
-  const botName = cfg.bot_name ?? "Milo";
+  const botName = cfg.bot_name ?? "Bot";
   const botIntro = cfg.bot_intro ?? "trợ lý AI";
   const rolePerms = cfg.role_permissions ?? {};
   const userPermissions = rolePerms[userRole] ?? `${userRole.toUpperCase()}`;
