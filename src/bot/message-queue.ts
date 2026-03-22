@@ -21,6 +21,7 @@ export interface QueueJob {
   userRole: string;
   text: string;
   tenantId: string;
+  botToken: string; // token of the bot this message came from
   priority: number; // lower = higher priority. admin=1, user=5
   createdAt: number;
   retries: number;

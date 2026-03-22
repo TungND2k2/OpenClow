@@ -55,44 +55,49 @@ async function callTelegram(method: string, params: Record<string, unknown>): Pr
   return callTelegramWithToken(token, method, params);
 }
 
-async function sendTelegramMessage(chatId: string | number, text: string): Promise<number | undefined> {
+async function sendTelegramMessage(chatId: string | number, text: string, token?: string): Promise<number | undefined> {
+  const t = token ?? getConfig().TELEGRAM_BOT_TOKEN ?? _bots.values().next().value?.token;
+  if (!t) return undefined;
   const chunks = splitMessage(text, 4000);
   let lastMsgId: number | undefined;
   for (const chunk of chunks) {
     try {
-      const result = await callTelegram("sendMessage", { chat_id: chatId, text: chunk, parse_mode: "HTML" });
+      const result = await callTelegramWithToken(t, "sendMessage", { chat_id: chatId, text: chunk, parse_mode: "HTML" });
       lastMsgId = result?.message_id;
     } catch {
-      const result = await callTelegram("sendMessage", { chat_id: chatId, text: chunk.replace(/<[^>]*>/g, "") });
+      const result = await callTelegramWithToken(t, "sendMessage", { chat_id: chatId, text: chunk.replace(/<[^>]*>/g, "") });
       lastMsgId = result?.message_id;
     }
   }
   return lastMsgId;
 }
 
-async function editTelegramMessage(chatId: string | number, messageId: number, text: string): Promise<void> {
+async function editTelegramMessage(chatId: string | number, messageId: number, text: string, token?: string): Promise<void> {
+  const t = token ?? getConfig().TELEGRAM_BOT_TOKEN ?? _bots.values().next().value?.token;
+  if (!t) return;
   try {
-    await callTelegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML" });
+    await callTelegramWithToken(t, "editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML" });
   } catch {
     try {
-      await callTelegram("editMessageText", { chat_id: chatId, message_id: messageId, text: text.replace(/<[^>]*>/g, "") });
+      await callTelegramWithToken(t, "editMessageText", { chat_id: chatId, message_id: messageId, text: text.replace(/<[^>]*>/g, "") });
     } catch {}
   }
 }
 
-async function sendTelegramFile(chatId: string | number, fileUrl: string, fileName: string, caption?: string): Promise<void> {
+async function sendTelegramFile(chatId: string | number, fileUrl: string, fileName: string, caption?: string, token?: string): Promise<void> {
+  const t = token ?? getConfig().TELEGRAM_BOT_TOKEN ?? _bots.values().next().value?.token;
+  if (!t) return;
   try {
     const mimeType = fileName.toLowerCase();
     if (mimeType.match(/\.(jpg|jpeg|png|gif|webp)$/)) {
-      await callTelegram("sendPhoto", { chat_id: chatId, photo: fileUrl, caption });
+      await callTelegramWithToken(t, "sendPhoto", { chat_id: chatId, photo: fileUrl, caption });
     } else if (mimeType.match(/\.(mp4|mov|avi)$/)) {
-      await callTelegram("sendVideo", { chat_id: chatId, video: fileUrl, caption });
+      await callTelegramWithToken(t, "sendVideo", { chat_id: chatId, video: fileUrl, caption });
     } else {
-      await callTelegram("sendDocument", { chat_id: chatId, document: fileUrl, caption });
+      await callTelegramWithToken(t, "sendDocument", { chat_id: chatId, document: fileUrl, caption });
     }
-  } catch (e: any) {
-    // Fallback: send URL as text
-    await sendTelegramMessage(chatId, `📎 <a href="${fileUrl}">${fileName}</a>${caption ? "\n" + caption : ""}`);
+  } catch {
+    await sendTelegramMessage(chatId, `📎 <a href="${fileUrl}">${fileName}</a>${caption ? "\n" + caption : ""}`, t);
   }
 }
 
@@ -321,12 +326,13 @@ async function handleJob(job: QueueJob): Promise<void> {
   const { history } = buildOptimizedHistory(freshSession);
 
   // ── Send progress message immediately ──
-  const progressMsgId = await sendTelegramMessage(job.chatId, "⏳ Đang xử lý...");
+  const tk = job.botToken;
+  const progressMsgId = await sendTelegramMessage(job.chatId, "⏳ Đang xử lý...", tk);
 
   // Progress callback
   const onProgress = async (stage: string) => {
     if (progressMsgId) {
-      await editTelegramMessage(job.chatId, progressMsgId, stage);
+      await editTelegramMessage(job.chatId, progressMsgId, stage, tk);
     }
   };
 
@@ -348,19 +354,17 @@ async function handleJob(job: QueueJob): Promise<void> {
   await appendMessage(session.id, { role: "assistant", content: response.text, at: Date.now() });
 
   if (progressMsgId && formattedText.length <= 4000) {
-    // Edit the progress message with final result
-    await editTelegramMessage(job.chatId, progressMsgId, formattedText);
+    await editTelegramMessage(job.chatId, progressMsgId, formattedText, tk);
   } else {
-    // Too long — delete progress, send new
     if (progressMsgId) {
-      try { await callTelegram("deleteMessage", { chat_id: job.chatId, message_id: progressMsgId }); } catch {}
+      try { await callTelegramWithToken(tk, "deleteMessage", { chat_id: job.chatId, message_id: progressMsgId }); } catch {}
     }
-    await sendTelegramMessage(job.chatId, formattedText);
+    await sendTelegramMessage(job.chatId, formattedText, tk);
   }
 
   // Send files from tool calls
   for (const file of response.files) {
-    await sendTelegramFile(job.chatId, file.url, file.fileName);
+    await sendTelegramFile(job.chatId, file.url, file.fileName, undefined, tk);
   }
 
   // Auto-send uploaded images mentioned in response
@@ -375,7 +379,7 @@ async function handleJob(job: QueueJob): Promise<void> {
     const nameWithoutExt = fname.replace(/\.[^.]+$/, "").replace(/_/g, " ");
     if (isImage && (responseText.includes(nameWithoutExt) || responseText.includes(fname) || responseText.includes((file as any).s3Url))) {
       try {
-        await callTelegram("sendPhoto", { chat_id: job.chatId, photo: (file as any).s3Url });
+        await callTelegramWithToken(tk, "sendPhoto", { chat_id: job.chatId, photo: (file as any).s3Url });
       } catch {}
     }
   }
@@ -390,6 +394,8 @@ async function processUpdate(
   msg: any, userId: string, _userName: string, _userRole: string | null,
   tenantId: string, botToken: string,
 ): Promise<void> {
+  // Helper — always send via the correct bot's token
+  const send = (chatId: string | number, text: string) => sendTelegramMessage(chatId, text, botToken);
   {
         const telegramName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") || msg.from.username || "User";
         const userInfo = await getUserInfo(userId, tenantId);
@@ -413,22 +419,22 @@ async function processUpdate(
           const text = msg.text.trim();
           if (text === "/cancel") {
             _registrations.delete(regKey);
-            await sendTelegramMessage(msg.chat.id, "❌ Đã huỷ đăng ký.");
+            await send(msg.chat.id, "❌ Đã huỷ đăng ký.");
             return;
           }
 
           if (regState.step === "name") {
             regState.fullName = text;
             regState.step = "phone";
-            await sendTelegramMessage(msg.chat.id, "📱 Nhập <b>số điện thoại</b> của bạn:");
+            await send(msg.chat.id, "📱 Nhập <b>số điện thoại</b> của bạn:");
           } else if (regState.step === "phone") {
             regState.phone = text;
             regState.step = "position";
-            await sendTelegramMessage(msg.chat.id, "💼 Nhập <b>vị trí / chức vụ</b> của bạn (VD: Sale, Marketing, Kế toán...):");
+            await send(msg.chat.id, "💼 Nhập <b>vị trí / chức vụ</b> của bạn (VD: Sale, Marketing, Kế toán...):");
           } else if (regState.step === "position") {
             regState.position = text;
             regState.step = "confirm";
-            await sendTelegramMessage(msg.chat.id,
+            await send(msg.chat.id,
               `📋 <b>Xác nhận thông tin đăng ký:</b>\n\n` +
               `👤 Họ tên: <b>${regState.fullName}</b>\n` +
               `📱 SĐT: <b>${regState.phone}</b>\n` +
@@ -447,14 +453,14 @@ async function processUpdate(
               });
               _registrations.delete(regKey);
 
-              await sendTelegramMessage(msg.chat.id,
+              await send(msg.chat.id,
                 `✅ Đã gửi yêu cầu đăng ký!\n\nVui lòng chờ admin duyệt. ${botName} sẽ thông báo khi tài khoản được kích hoạt.`
               );
 
               // Notify all admins
               const adminIds = await getAdminChatIds(tenantId);
               for (const adminId of adminIds) {
-                await sendTelegramMessage(adminId,
+                await send(adminId,
                   `🔔 <b>Yêu cầu đăng ký mới!</b>\n\n` +
                   `👤 ${regState.fullName}\n` +
                   `📱 ${regState.phone}\n` +
@@ -466,7 +472,7 @@ async function processUpdate(
               }
               console.error(`[Bot] ${regState.fullName}(${userId}) registration pending — admins notified`);
             } else {
-              await sendTelegramMessage(msg.chat.id, "Gõ <b>OK</b> để xác nhận, hoặc /cancel để huỷ.");
+              await send(msg.chat.id, "Gõ <b>OK</b> để xác nhận, hoặc /cancel để huỷ.");
             }
           }
           return;
@@ -475,7 +481,7 @@ async function processUpdate(
         // ── Access control ──
         if (!userRole) {
           if (msg.text?.trim() === "/start") {
-            await sendTelegramMessage(msg.chat.id,
+            await send(msg.chat.id,
               `👋 Chào <b>${telegramName}</b>!\n\nMình là <b>${botName}</b> — trợ lý AI.\n\nGõ /register để đăng ký sử dụng.`
             );
           } else if (msg.text?.trim() === "/register") {
@@ -488,22 +494,22 @@ async function processUpdate(
               )).limit(1))[0];
 
             if (existingUser && existingUser.isActive === false) {
-              await sendTelegramMessage(msg.chat.id,
+              await send(msg.chat.id,
                 `⏳ Bạn đã đăng ký rồi, đang chờ admin duyệt. Vui lòng đợi nhé!`
               );
             } else if (existingUser && existingUser.isActive === true) {
-              await sendTelegramMessage(msg.chat.id,
+              await send(msg.chat.id,
                 `✅ Bạn đã có tài khoản rồi! Hãy hỏi ${botName} bất kỳ điều gì.`
               );
             } else {
               _registrations.set(regKey, { step: "name", telegramName, telegramUsername: msg.from.username });
-              await sendTelegramMessage(msg.chat.id,
+              await send(msg.chat.id,
                 `📝 <b>Đăng ký sử dụng ${botName}</b>\n\n👤 Nhập <b>họ và tên</b> của bạn:`
               );
             }
           } else {
             console.error(`[Bot] ${telegramName}(${userId})[DENIED]: not registered`);
-            await sendTelegramMessage(msg.chat.id,
+            await send(msg.chat.id,
               `⛔ Bạn chưa đăng ký.\n\nGõ /register để đăng ký, hoặc /start để xem hướng dẫn.`
             );
           }
@@ -516,13 +522,13 @@ async function processUpdate(
           if (approveMatch) {
             const targetId = approveMatch[1];
             if (await approveUser(tenantId, targetId)) {
-              await sendTelegramMessage(msg.chat.id, `✅ Đã duyệt user ${targetId}`);
+              await send(msg.chat.id, `✅ Đã duyệt user ${targetId}`);
               // Notify the approved user
-              await sendTelegramMessage(targetId,
+              await send(targetId,
                 `🎉 <b>Tài khoản đã được duyệt!</b>\n\nChào mừng bạn! Hãy hỏi ${botName} bất kỳ điều gì.`
               );
             } else {
-              await sendTelegramMessage(msg.chat.id, `❌ Không tìm thấy user ${targetId}`);
+              await send(msg.chat.id, `❌ Không tìm thấy user ${targetId}`);
             }
             return;
           }
@@ -531,12 +537,12 @@ async function processUpdate(
           if (rejectMatch) {
             const targetId = rejectMatch[1];
             if (await rejectUser(tenantId, targetId)) {
-              await sendTelegramMessage(msg.chat.id, `❌ Đã từ chối user ${targetId}`);
-              await sendTelegramMessage(targetId,
+              await send(msg.chat.id, `❌ Đã từ chối user ${targetId}`);
+              await send(targetId,
                 `😔 Yêu cầu đăng ký của bạn đã bị từ chối. Liên hệ admin nếu cần hỗ trợ.`
               );
             } else {
-              await sendTelegramMessage(msg.chat.id, `Không tìm thấy user pending ${targetId}`);
+              await send(msg.chat.id, `Không tìm thấy user pending ${targetId}`);
             }
             return;
           }
@@ -544,13 +550,13 @@ async function processUpdate(
           if (msg.text.trim() === "/pending") {
             const pending = await getPendingUsers(tenantId);
             if (pending.length === 0) {
-              await sendTelegramMessage(msg.chat.id, "📋 Không có yêu cầu đăng ký nào đang chờ duyệt.");
+              await send(msg.chat.id, "📋 Không có yêu cầu đăng ký nào đang chờ duyệt.");
             } else {
               const list = pending.map((u: any) => {
                 const meta = typeof u.metadata === "string" ? JSON.parse(u.metadata) : (u.metadata ?? {});
                 return `• <b>${u.displayName}</b> — ${meta.position ?? "N/A"} — ${meta.phone ?? "N/A"}\n  /approve ${u.channelUserId}  |  /reject ${u.channelUserId}`;
               }).join("\n\n");
-              await sendTelegramMessage(msg.chat.id, `📋 <b>Đang chờ duyệt (${pending.length}):</b>\n\n${list}`);
+              await send(msg.chat.id, `📋 <b>Đang chờ duyệt (${pending.length}):</b>\n\n${list}`);
             }
             return;
           }
@@ -569,7 +575,7 @@ async function processUpdate(
             const { checkPermission: cp } = await import("../modules/permissions/permission.service.js");
             const canManage = await cp(tenantId, userId, userRole, resource, "manage");
             if (!canManage.allowed) {
-              await sendTelegramMessage(msg.chat.id, `⛔ Bạn không có quyền Manage trên <b>${resource}</b>. Không thể cấp quyền.`);
+              await send(msg.chat.id, `⛔ Bạn không có quyền Manage trên <b>${resource}</b>. Không thể cấp quyền.`);
               return;
             }
 
@@ -578,7 +584,7 @@ async function processUpdate(
               const ownPerm = await cp(tenantId, userId, userRole, resource, "create");
               for (const c of access) {
                 if (c === "M") {
-                  await sendTelegramMessage(msg.chat.id, `⛔ Chỉ Admin mới được cấp quyền Manage (M).`);
+                  await send(msg.chat.id, `⛔ Chỉ Admin mới được cấp quyền Manage (M).`);
                   return;
                 }
               }
@@ -593,9 +599,9 @@ async function processUpdate(
               if (match) targetId = match.channelUserId;
             }
             await gp(tenantId, targetId, resource, access);
-            await sendTelegramMessage(msg.chat.id, `✅ Đã cấp quyền <b>${access}</b> trên <b>${resource}</b> cho user <b>${targetId}</b>`);
+            await send(msg.chat.id, `✅ Đã cấp quyền <b>${access}</b> trên <b>${resource}</b> cho user <b>${targetId}</b>`);
             // Notify the user
-            try { await sendTelegramMessage(targetId, `🔓 Bạn đã được cấp quyền <b>${access}</b> trên <b>${resource}</b>`); } catch {}
+            try { await send(targetId, `🔓 Bạn đã được cấp quyền <b>${access}</b> trên <b>${resource}</b>`); } catch {}
             return;
           }
 
@@ -603,7 +609,7 @@ async function processUpdate(
           const denyMatch = msg.text.match(/^\/deny\s+(\S+)$/i);
           if (denyMatch) {
             await rpr(denyMatch[1], "rejected");
-            await sendTelegramMessage(msg.chat.id, `❌ Đã từ chối yêu cầu quyền.`);
+            await send(msg.chat.id, `❌ Đã từ chối yêu cầu quyền.`);
             return;
           }
 
@@ -620,7 +626,7 @@ async function processUpdate(
               if (match) targetId = match.channelUserId;
             }
             await rvk(tenantId, targetId, resource);
-            await sendTelegramMessage(msg.chat.id, `🔒 Đã thu hồi quyền trên <b>${resource}</b> của user <b>${targetId}</b>`);
+            await send(msg.chat.id, `🔒 Đã thu hồi quyền trên <b>${resource}</b> của user <b>${targetId}</b>`);
             return;
           }
 
@@ -628,12 +634,12 @@ async function processUpdate(
           if (msg.text.trim() === "/permissions") {
             const reqs = await gpr(userId);
             if (reqs.length === 0) {
-              await sendTelegramMessage(msg.chat.id, "📋 Không có yêu cầu quyền nào đang chờ.");
+              await send(msg.chat.id, "📋 Không có yêu cầu quyền nào đang chờ.");
             } else {
               const list = reqs.map((r: any) =>
                 `• <b>${r.requesterName}</b> xin <b>${r.requestedAccess}</b> trên <b>${r.resource}</b>\n  <code>/grant ${r.requesterId} ${r.resource} ${r.requestedAccess}</code>  |  <code>/deny ${r.id}</code>`
               ).join("\n\n");
-              await sendTelegramMessage(msg.chat.id, `🔐 <b>Yêu cầu quyền (${reqs.length}):</b>\n\n${list}`);
+              await send(msg.chat.id, `🔐 <b>Yêu cầu quyền (${reqs.length}):</b>\n\n${list}`);
             }
             return;
           }
@@ -650,6 +656,7 @@ async function processUpdate(
 
         if (!msg.text) return;
 
+        const bot = _bots.get(tenantId);
         const job: QueueJob = {
           id: newId(),
           chatId: msg.chat.id,
@@ -658,13 +665,14 @@ async function processUpdate(
           userRole: userRole!,
           text: msg.text.trim(),
           tenantId,
+          botToken: bot?.token ?? getConfig().TELEGRAM_BOT_TOKEN ?? "",
           priority: userRole === "admin" ? 1 : userRole === "manager" ? 2 : 5,
           createdAt: Date.now(),
           retries: 0,
           maxRetries: 2,
         };
 
-        console.error(`[Bot] ${userName}(${userId})[${userRole}]: ${job.text.substring(0, 60)}`);
+        console.error(`[Bot:${bot?.tenantName ?? "?"}] ${userName}(${userId})[${userRole}]: ${job.text.substring(0, 60)}`);
         _queue.enqueue(job);
   }
 }
@@ -735,6 +743,7 @@ async function handleFileUpload(
 
     // If has caption, process it as a message with file context
     if (caption) {
+      const _bot = _bots.get(tenantId);
       const job: QueueJob = {
         id: newId(),
         chatId,
@@ -743,6 +752,7 @@ async function handleFileUpload(
         userRole: (await getUserInfo(userId, tenantId)).role ?? "user",
         text: `[File uploaded: ${fileName} (${mimeType}, ${sizeStr}) → ID: ${result.id}] ${caption}`,
         tenantId,
+        botToken: _bot?.token ?? getConfig().TELEGRAM_BOT_TOKEN ?? "",
         priority: 3,
         createdAt: Date.now(),
         retries: 0,
