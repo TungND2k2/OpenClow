@@ -73,11 +73,11 @@ Persona lưu DB — bot tự nhớ vai trò:
 
 ### Agent System — ai làm gì?
 
-| Agent | Vai trò | LLM |
-|-------|---------|-----|
-| **🧠 Commander** | Não chính — nhận message, hiểu ý định, phân rã thành subtasks, tổng hợp kết quả trả user | Strong LLM |
-| **📋 Supervisor** | Quản lý nhóm — nhận subtasks từ Commander, assign cho Workers phù hợp, review kết quả | Fast LLM |
-| **⚙️ Worker** | Thực thi — nhận 1 task cụ thể, gọi tools (đọc file, query DB, tạo đơn...), trả kết quả | Fast LLM |
+| Agent | Vai trò |
+|-------|---------|
+| **🧠 Commander** | Não chính — nhận message, hiểu ý định, phân rã thành subtasks, tổng hợp kết quả trả user |
+| **📋 Supervisor** | Quản lý nhóm — nhận subtasks từ Commander, assign cho Workers phù hợp, review kết quả |
+| **⚙️ Worker** | Thực thi — nhận 1 task cụ thể, gọi tools (đọc file, query DB, tạo đơn...), trả kết quả |
 
 ```
 Ví dụ: User hỏi "đọc cẩm nang sale, tóm tắt, rồi tạo quy trình onboarding"
@@ -94,7 +94,6 @@ Worker 3: create_workflow → tạo quy trình
 Commander: tổng hợp kết quả → trả user
 ```
 
-> **LLM = não, Agent = nhân viên.** Cùng não (LLM), khác job description (system prompt + tools + quyền).
 > Tạo agent mới qua chat — không cần code. Agent Templates lưu DB.
 
 ---
