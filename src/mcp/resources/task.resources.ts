@@ -6,10 +6,10 @@ import { tasks } from "../../db/schema.js";
 export function registerTaskResources(server: McpServer): void {
   server.resource("task-board", "openclaw://tasks/board", async () => {
     const db = getDb();
-    const byStatus = db.select({
+    const byStatus = await db.select({
       status: tasks.status,
       count: sql<number>`count(*)`,
-    }).from(tasks).groupBy(tasks.status).all();
+    }).from(tasks).groupBy(tasks.status);
 
     return {
       contents: [{

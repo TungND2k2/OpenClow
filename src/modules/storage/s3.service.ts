@@ -80,7 +80,7 @@ export async function uploadFile(input: {
 
   // Save metadata to DB
   const db = getDb();
-  db.insert(files).values({
+  await db.insert(files).values({
     id,
     tenantId: input.tenantId,
     fileName: input.fileName,
@@ -93,7 +93,7 @@ export async function uploadFile(input: {
     taskId: input.taskId ?? null,
     workflowInstanceId: input.workflowInstanceId ?? null,
     createdAt: nowMs(),
-  }).run();
+  });
 
   console.error(`[S3] ✓ Uploaded: ${id} (${s3Key})`);
   return { id, s3Key, s3Url };
@@ -109,7 +109,7 @@ export async function downloadFile(fileId: string): Promise<{
   fileSize: number;
 } | null> {
   const db = getDb();
-  const file = db.select().from(files).where(eq(files.id, fileId)).get();
+  const file = (await db.select().from(files).where(eq(files.id, fileId)).limit(1))[0];
   if (!file) return null;
 
   const config = getConfig();
@@ -129,7 +129,7 @@ export async function downloadFile(fileId: string): Promise<{
 }
 
 /**
- * Read file content as text. Supports: TXT, CSV, JSON, DOCX, PDF (basic).
+ * Read file content as text. Supports: TXT, CSV, JSON, DOCX, PDF, XLSX.
  */
 export async function readFileContent(fileId: string): Promise<{
   content: string;
@@ -138,7 +138,7 @@ export async function readFileContent(fileId: string): Promise<{
   truncated: boolean;
 } | null> {
   const db = getDb();
-  const file = db.select().from(files).where(eq(files.id, fileId)).get();
+  const file = (await db.select().from(files).where(eq(files.id, fileId)).limit(1))[0];
   if (!file) return null;
 
   const config = getConfig();
@@ -161,11 +161,45 @@ export async function readFileContent(fileId: string): Promise<{
   } else if (mime.includes("wordprocessingml") || file.fileName.endsWith(".docx")) {
     const result = await mammoth.extractRawText({ buffer });
     content = result.value;
-  } else if (mime === "application/pdf") {
-    // Basic PDF text extraction — just look for text streams
-    const text = buffer.toString("utf-8");
-    const matches = text.match(/\(([^)]+)\)/g);
-    content = matches ? matches.map(m => m.slice(1, -1)).join(" ") : "[PDF content — cannot extract text without pdf-parse library]";
+  } else if (mime === "application/pdf" || file.fileName.endsWith(".pdf")) {
+    // Try pdf-parse first
+    try {
+      const pdfParse = (await import("pdf-parse")).default;
+      const result = await pdfParse(buffer);
+      if (result.text && result.text.trim().length > 10) {
+        content = result.text;
+      } else {
+        throw new Error("Empty text");
+      }
+    } catch {
+      // Fallback: mutool (handles Google Sheets PDFs, scanned docs better)
+      try {
+        const { writeFileSync, unlinkSync, readFileSync } = await import("fs");
+        const { execSync } = await import("child_process");
+        const tmpIn = `/tmp/pdf_${Date.now()}.pdf`;
+        const tmpOut = `/tmp/pdf_${Date.now()}.txt`;
+        writeFileSync(tmpIn, buffer);
+        execSync(`mutool draw -F text "${tmpIn}" 2>/dev/null > "${tmpOut}"`, { timeout: 15000 });
+        content = readFileSync(tmpOut, "utf-8");
+        try { unlinkSync(tmpIn); unlinkSync(tmpOut); } catch {}
+      } catch {
+        content = `[PDF không đọc được: ${file.fileName}]`;
+      }
+    }
+  } else if (mime.includes("spreadsheetml") || file.fileName.endsWith(".xlsx") || file.fileName.endsWith(".xls")) {
+    try {
+      const XLSX = await import("xlsx");
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const sheets: string[] = [];
+      for (const name of workbook.SheetNames) {
+        const sheet = workbook.Sheets[name];
+        const csv = XLSX.utils.sheet_to_csv(sheet);
+        sheets.push(`=== Sheet: ${name} ===\n${csv}`);
+      }
+      content = sheets.join("\n\n");
+    } catch {
+      content = `[Excel không đọc được: ${file.fileName}]`;
+    }
   } else {
     content = `[Binary file: ${file.fileName} (${file.mimeType}, ${file.fileSize} bytes)]`;
   }
@@ -185,7 +219,7 @@ export async function readFileContent(fileId: string): Promise<{
  */
 export async function deleteFile(fileId: string): Promise<boolean> {
   const db = getDb();
-  const file = db.select().from(files).where(eq(files.id, fileId)).get();
+  const file = (await db.select().from(files).where(eq(files.id, fileId)).limit(1))[0];
   if (!file) return false;
 
   const config = getConfig();
@@ -196,7 +230,7 @@ export async function deleteFile(fileId: string): Promise<boolean> {
     Key: file.s3Key,
   }));
 
-  db.delete(files).where(eq(files.id, fileId)).run();
+  await db.delete(files).where(eq(files.id, fileId));
   console.error(`[S3] Deleted: ${fileId} (${file.s3Key})`);
   return true;
 }
@@ -204,22 +238,21 @@ export async function deleteFile(fileId: string): Promise<boolean> {
 /**
  * Get file metadata from DB.
  */
-export function getFile(fileId: string) {
+export async function getFile(fileId: string) {
   const db = getDb();
-  return db.select().from(files).where(eq(files.id, fileId)).get() ?? null;
+  return (await db.select().from(files).where(eq(files.id, fileId)).limit(1))[0] ?? null;
 }
 
 /**
  * List files for a tenant.
  */
-export function listFiles(tenantId: string, limit: number = 20) {
+export async function listFiles(tenantId: string, limit: number = 20) {
   const db = getDb();
-  return db.select()
+  return await db.select()
     .from(files)
     .where(eq(files.tenantId, tenantId))
     .orderBy(files.createdAt)
-    .limit(limit)
-    .all();
+    .limit(limit);
 }
 
 /**

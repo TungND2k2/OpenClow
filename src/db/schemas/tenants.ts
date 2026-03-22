@@ -1,28 +1,28 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
-  integer,
+  bigint,
+  boolean,
+  jsonb,
   uniqueIndex,
   index,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 
 // ============================================================
 // tenants
 // ============================================================
-export const tenants = sqliteTable(
+export const tenants = pgTable(
   "tenants",
   {
     id: text("id").primaryKey(),
     name: text("name").notNull(),
-    config: text("config", { mode: "json" }).notNull().default("{}"),
-    aiConfig: text("ai_config", { mode: "json" }).notNull().default("{}"),
-    status: text("status", {
-      enum: ["active", "suspended", "archived"],
-    })
+    config: jsonb("config").notNull().default({}),
+    aiConfig: jsonb("ai_config").notNull().default({}),
+    status: text("status")
       .notNull()
       .default("active"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [index("idx_tenants_status").on(table.status)]
 );
@@ -30,7 +30,7 @@ export const tenants = sqliteTable(
 // ============================================================
 // tenant_users — maps external users (telegram, etc.) to roles
 // ============================================================
-export const tenantUsers = sqliteTable(
+export const tenantUsers = pgTable(
   "tenant_users",
   {
     id: text("id").primaryKey(),
@@ -40,15 +40,15 @@ export const tenantUsers = sqliteTable(
     channel: text("channel").notNull(), // "telegram", "web", "slack"
     channelUserId: text("channel_user_id").notNull(), // telegram user ID, etc.
     displayName: text("display_name"),
-    role: text("role", {
-      enum: ["admin", "manager", "staff", "user"],
-    })
+    role: text("role")
       .notNull()
       .default("user"),
-    permissions: text("permissions", { mode: "json" }).default("[]"), // granular permissions
-    isActive: integer("is_active").notNull().default(1),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    permissions: jsonb("permissions").default([]), // granted permissions: ["form_templates:CRU", "collection_rows:CRUD"]
+    reportsTo: text("reports_to"), // channel_user_id of direct manager (1 person)
+    metadata: jsonb("metadata").default({}), // phone, position, etc.
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [
     uniqueIndex("idx_tenant_users_channel_user").on(

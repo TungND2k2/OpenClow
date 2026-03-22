@@ -1,15 +1,17 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
   integer,
+  bigint,
+  jsonb,
   index,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 import { tenants } from "./tenants.js";
 
 // ============================================================
 // files — metadata for uploaded files (actual bytes in S3)
 // ============================================================
-export const files = sqliteTable(
+export const files = pgTable(
   "files",
   {
     id: text("id").primaryKey(),
@@ -25,8 +27,8 @@ export const files = sqliteTable(
     channel: text("channel").notNull(), // telegram, web, etc.
     taskId: text("task_id"), // linked task if any
     workflowInstanceId: text("workflow_instance_id"), // linked workflow
-    metadata: text("metadata", { mode: "json" }).default("{}"), // extracted text, dimensions, etc.
-    createdAt: integer("created_at").notNull(),
+    metadata: jsonb("metadata").default({}), // extracted text, dimensions, etc.
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_files_tenant").on(table.tenantId),

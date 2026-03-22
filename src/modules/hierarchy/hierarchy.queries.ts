@@ -6,36 +6,33 @@ import { agents, agentHierarchy } from "../../db/schema.js";
  * Insert closure table entries when an agent is added to the hierarchy.
  * Creates self-reference (depth 0) + copies ancestor paths from parent.
  */
-export function insertHierarchyEntries(
+export async function insertHierarchyEntries(
   agentId: string,
   parentAgentId: string | null
-): void {
+): Promise<void> {
   const db = getDb();
 
   // Self-reference
-  db.insert(agentHierarchy)
-    .values({ ancestorId: agentId, descendantId: agentId, depth: 0 })
-    .run();
+  await db.insert(agentHierarchy)
+    .values({ ancestorId: agentId, descendantId: agentId, depth: 0 });
 
   if (parentAgentId) {
     // Copy all ancestors of parent, incrementing depth by 1
-    const parentAncestors = db
+    const parentAncestors = await db
       .select({
         ancestorId: agentHierarchy.ancestorId,
         depth: agentHierarchy.depth,
       })
       .from(agentHierarchy)
-      .where(eq(agentHierarchy.descendantId, parentAgentId))
-      .all();
+      .where(eq(agentHierarchy.descendantId, parentAgentId));
 
     for (const row of parentAncestors) {
-      db.insert(agentHierarchy)
+      await db.insert(agentHierarchy)
         .values({
           ancestorId: row.ancestorId,
           descendantId: agentId,
           depth: row.depth + 1,
-        })
-        .run();
+        });
     }
   }
 }
@@ -44,11 +41,11 @@ export function insertHierarchyEntries(
  * Remove all closure table entries for an agent.
  * Used before re-parenting.
  */
-export function removeHierarchyEntries(agentId: string): void {
+export async function removeHierarchyEntries(agentId: string): Promise<void> {
   const db = getDb();
 
   // Get all descendants of this agent (excluding self at depth 0 initially)
-  const descendants = db
+  const descendants = await db
     .select({ descendantId: agentHierarchy.descendantId })
     .from(agentHierarchy)
     .where(
@@ -56,18 +53,16 @@ export function removeHierarchyEntries(agentId: string): void {
         eq(agentHierarchy.ancestorId, agentId),
         sql`${agentHierarchy.depth} > 0`
       )
-    )
-    .all();
+    );
 
   // Remove entries where this agent is a descendant (its ancestor paths)
-  db.delete(agentHierarchy)
-    .where(eq(agentHierarchy.descendantId, agentId))
-    .run();
+  await db.delete(agentHierarchy)
+    .where(eq(agentHierarchy.descendantId, agentId));
 
   // For each descendant, remove entries that go through this agent
   // (entries where ancestor is an ancestor of agentId)
   for (const desc of descendants) {
-    db.delete(agentHierarchy)
+    await db.delete(agentHierarchy)
       .where(
         and(
           eq(agentHierarchy.descendantId, desc.descendantId),
@@ -76,18 +71,17 @@ export function removeHierarchyEntries(agentId: string): void {
             AND ancestor_id = descendant_id
           )`
         )
-      )
-      .run();
+      );
   }
 }
 
 /**
  * Get all descendants of an agent (agents under their command).
  */
-export function getDescendants(
+export async function getDescendants(
   agentId: string,
   maxDepth?: number
-): { descendantId: string; depth: number }[] {
+): Promise<{ descendantId: string; depth: number }[]> {
   const db = getDb();
 
   const conditions = [
@@ -99,24 +93,23 @@ export function getDescendants(
     conditions.push(sql`${agentHierarchy.depth} <= ${maxDepth}`);
   }
 
-  return db
+  return await db
     .select({
       descendantId: agentHierarchy.descendantId,
       depth: agentHierarchy.depth,
     })
     .from(agentHierarchy)
-    .where(and(...conditions))
-    .all();
+    .where(and(...conditions));
 }
 
 /**
  * Get all ancestors of an agent (chain of command up to Commander).
  */
-export function getAncestors(
+export async function getAncestors(
   agentId: string
-): { ancestorId: string; depth: number }[] {
+): Promise<{ ancestorId: string; depth: number }[]> {
   const db = getDb();
-  return db
+  return await db
     .select({
       ancestorId: agentHierarchy.ancestorId,
       depth: agentHierarchy.depth,
@@ -128,19 +121,18 @@ export function getAncestors(
         sql`${agentHierarchy.depth} > 0`
       )
     )
-    .orderBy(agentHierarchy.depth)
-    .all();
+    .orderBy(agentHierarchy.depth);
 }
 
 /**
  * Check if ancestor is actually an ancestor of descendant.
  */
-export function isAncestorOf(
+export async function isAncestorOf(
   ancestorId: string,
   descendantId: string
-): boolean {
+): Promise<boolean> {
   const db = getDb();
-  const row = db
+  const row = (await db
     .select({ depth: agentHierarchy.depth })
     .from(agentHierarchy)
     .where(
@@ -150,16 +142,16 @@ export function isAncestorOf(
         sql`${agentHierarchy.depth} > 0`
       )
     )
-    .get();
+    .limit(1))[0];
   return row !== undefined;
 }
 
 /**
  * Get direct children (depth = 1) of an agent.
  */
-export function getDirectChildren(agentId: string): string[] {
+export async function getDirectChildren(agentId: string): Promise<string[]> {
   const db = getDb();
-  const rows = db
+  const rows = await db
     .select({ descendantId: agentHierarchy.descendantId })
     .from(agentHierarchy)
     .where(
@@ -167,17 +159,16 @@ export function getDirectChildren(agentId: string): string[] {
         eq(agentHierarchy.ancestorId, agentId),
         eq(agentHierarchy.depth, 1)
       )
-    )
-    .all();
+    );
   return rows.map((r) => r.descendantId);
 }
 
 /**
  * Count direct children of an agent.
  */
-export function countDirectChildren(agentId: string): number {
+export async function countDirectChildren(agentId: string): Promise<number> {
   const db = getDb();
-  const row = db
+  const row = (await db
     .select({ count: sql<number>`count(*)` })
     .from(agentHierarchy)
     .where(
@@ -185,7 +176,6 @@ export function countDirectChildren(agentId: string): number {
         eq(agentHierarchy.ancestorId, agentId),
         eq(agentHierarchy.depth, 1)
       )
-    )
-    .get();
+    ))[0];
   return row?.count ?? 0;
 }

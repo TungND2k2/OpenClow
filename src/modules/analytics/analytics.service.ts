@@ -19,11 +19,11 @@ export interface CostReport {
   byModel: { model: string; costUsd: number; requests: number }[];
 }
 
-export function getTaskMetrics(filters?: {
+export async function getTaskMetrics(filters?: {
   agentId?: string;
   since?: number;
   until?: number;
-}): TaskMetrics {
+}): Promise<TaskMetrics> {
   const db = getDb();
   const conditions: any[] = [];
   if (filters?.agentId) conditions.push(eq(tasks.assignedAgentId, filters.agentId));
@@ -31,7 +31,7 @@ export function getTaskMetrics(filters?: {
   if (filters?.until) conditions.push(sql`${tasks.createdAt} <= ${filters.until}`);
   const where = conditions.length ? and(...conditions) : undefined;
 
-  const allTasks = db.select({ status: tasks.status }).from(tasks).where(where).all();
+  const allTasks = await db.select({ status: tasks.status }).from(tasks).where(where);
   const byStatus: Record<string, number> = {};
   for (const t of allTasks) byStatus[t.status] = (byStatus[t.status] ?? 0) + 1;
 
@@ -40,15 +40,15 @@ export function getTaskMetrics(filters?: {
   const total = allTasks.length;
   const completionRate = completed + failed > 0 ? completed / (completed + failed) : 0;
 
-  const durRow = db.select({
+  const durRow = (await db.select({
     avg: sql<number>`avg(${tasks.completedAt} - ${tasks.startedAt})`,
   }).from(tasks).where(
     and(...(conditions.length ? conditions : []), sql`${tasks.completedAt} IS NOT NULL AND ${tasks.startedAt} IS NOT NULL`)
-  ).get();
+  ))[0];
 
-  const retryRow = db.select({
+  const retryRow = (await db.select({
     avg: sql<number>`avg(${tasks.retryCount})`,
-  }).from(tasks).where(where).get();
+  }).from(tasks).where(where))[0];
 
   return {
     total,
@@ -59,11 +59,11 @@ export function getTaskMetrics(filters?: {
   };
 }
 
-export function getCostReport(filters?: {
+export async function getCostReport(filters?: {
   agentId?: string;
   since?: number;
   until?: number;
-}): CostReport {
+}): Promise<CostReport> {
   const db = getDb();
   const conditions: any[] = [];
   if (filters?.agentId) conditions.push(eq(tokenUsage.agentId, filters.agentId));
@@ -71,24 +71,24 @@ export function getCostReport(filters?: {
   if (filters?.until) conditions.push(sql`${tokenUsage.createdAt} <= ${filters.until}`);
   const where = conditions.length ? and(...conditions) : undefined;
 
-  const totals = db.select({
+  const totals = (await db.select({
     cost: sql<number>`COALESCE(SUM(${tokenUsage.costUsd}), 0)`,
     input: sql<number>`COALESCE(SUM(${tokenUsage.inputTokens}), 0)`,
     output: sql<number>`COALESCE(SUM(${tokenUsage.outputTokens}), 0)`,
     count: sql<number>`count(*)`,
-  }).from(tokenUsage).where(where).get();
+  }).from(tokenUsage).where(where))[0];
 
-  const byAgent = db.select({
+  const byAgent = await db.select({
     agentId: tokenUsage.agentId,
     costUsd: sql<number>`SUM(${tokenUsage.costUsd})`,
     requests: sql<number>`count(*)`,
-  }).from(tokenUsage).where(where).groupBy(tokenUsage.agentId).all();
+  }).from(tokenUsage).where(where).groupBy(tokenUsage.agentId);
 
-  const byModel = db.select({
+  const byModel = await db.select({
     model: tokenUsage.model,
     costUsd: sql<number>`SUM(${tokenUsage.costUsd})`,
     requests: sql<number>`count(*)`,
-  }).from(tokenUsage).where(where).groupBy(tokenUsage.model).all();
+  }).from(tokenUsage).where(where).groupBy(tokenUsage.model);
 
   return {
     totalCostUsd: totals?.cost ?? 0,
@@ -100,16 +100,16 @@ export function getCostReport(filters?: {
   };
 }
 
-export function getAgentPerformanceRanking(): {
+export async function getAgentPerformanceRanking(): Promise<{
   agentId: string;
   name: string;
   role: string;
   score: number;
   completed: number;
   failed: number;
-}[] {
+}[]> {
   const db = getDb();
-  return db.select({
+  return await db.select({
     agentId: agents.id,
     name: agents.name,
     role: agents.role,
@@ -117,6 +117,5 @@ export function getAgentPerformanceRanking(): {
     completed: agents.tasksCompleted,
     failed: agents.tasksFailed,
   }).from(agents)
-    .orderBy(sql`${agents.performanceScore} DESC`)
-    .all();
+    .orderBy(sql`${agents.performanceScore} DESC`);
 }

@@ -1,294 +1,409 @@
 # OpenClaw
 
-Hệ thống **local-first, hierarchical multi-agent orchestration** — điều phối nhiều AI agent hoạt động semi-autonomous.
+**Multi-Agent Orchestration System — Semi-Autonomous AI Workforce**
+
+Hệ thống AI agent phân cấp, tự học, quản lý qua chat — không cần code.
+
+---
+
+## OpenClaw là gì?
+
+Thay vì 1 chatbot → OpenClaw là **đội ngũ AI** làm việc như công ty thật.
+
+Admin/Manager dạy AI qua chat → AI tự học → tự xử lý lần sau.
+
+```mermaid
+graph TD
+    U[👤 User — Telegram] -->|nhắn tin| Q[📬 Message Queue]
+    Q -->|priority sort| P[🔐 Permission Check]
+    P -->|allowed| C[🧠 Commander]
+    P -->|denied| AR[📩 Approval Request]
+    AR -->|gửi 1 người| MGR[👔 Manager/Admin]
+    MGR -->|/grant| P
+
+    C -->|phân rã task| S1[📋 Supervisor 1]
+    C -->|phân rã task| S2[📋 Supervisor 2]
+
+    S1 -->|giao việc| W1[⚙️ Worker 1]
+    S1 -->|giao việc| W2[⚙️ Worker 2]
+    S2 -->|giao việc| W3[⚙️ Worker 3]
+
+    W1 & W2 & W3 -->|gọi tools| T[🔧 Tool Registry]
+
+    T --> DB[(🗄️ PostgreSQL)]
+    T --> S3[📦 S3 Storage]
+    T --> KB[📚 Knowledge Base]
+    T --> AL[📝 Audit Log]
+
+    KB -.->|kiến thức đã học| C
+
+    style C fill:#4A90D9,color:#fff
+    style P fill:#E74C3C,color:#fff
+    style S1 fill:#7B68EE,color:#fff
+    style S2 fill:#7B68EE,color:#fff
+    style W1 fill:#2ECC71,color:#fff
+    style W2 fill:#2ECC71,color:#fff
+    style W3 fill:#2ECC71,color:#fff
+    style AL fill:#F39C12,color:#fff
+```
+
+---
+
+## Tính năng chính
+
+### 1. Agent phân cấp — tạo qua chat, không code
+
+```
+Admin: "tạo agent Sales Analyst chuyên phân tích file"
+→ AI tạo template trong DB
+→ "spawn 3 con" → 3 workers sẵn sàng
+→ Tắt: "kill agent Worker-2"
+```
+
+### 2. Tự học từ hội thoại (Self-Learning)
+
+```
+Lần 1: Manager dạy "task loại A thuộc phòng X, task loại B thuộc phòng Y"
+→ Lưu vào Knowledge Base + Business Rules
+
+Lần 2: User tạo task loại A
+→ AI tự phân loại → Phòng X → phân quyền xem
+→ Không cần ai dạy lại
+```
+
+### 3. Dynamic Data — tạo bảng qua chat
+
+```
+Admin: "tạo bảng Đơn hàng gồm mã đơn, sản phẩm, số lượng, deadline"
+→ AI tạo collection trong DB
+→ "thêm đơn DH-001 sản phẩm A, 100 cái, deadline tuần sau"
+→ Lưu vào PostgreSQL thật, không bịa
+```
+
+### 4. File & Vision
+
+```
+User gửi file PDF/DOCX/Excel → upload S3 → extract text
+User gửi ảnh → AI phân tích nội dung (vision)
+User: "đọc tài liệu hướng dẫn" → AI tự tìm file → đọc → tóm tắt
+```
+
+### 5. Phân quyền Dynamic + Approval Flow
+
+```
+Admin → full quyền, cấp/thu hồi quyền cho mọi người
+Manager → quyền mặc định CRU, xin thêm từ Admin
+Staff/Sales → quyền mặc định CR, xin thêm từ Manager trực tiếp
+
+Khi không đủ quyền:
+  → Hệ thống hỏi "Gửi yêu cầu xin quyền cho [Manager X]?"
+  → Bắn đúng 1 người (reports_to) — không loạn
+  → Manager: /grant user resource CRUD → cấp vĩnh viễn
+
+Chưa đăng ký → /register → admin duyệt
+```
+
+### 6. Multi-step Form Persistent
+
+```
+Form 19 bước → user nhập từng field → data lưu DB mỗi bước
+→ Tắt app, quay lại → data vẫn còn
+→ Hỏi "bước 1 nhập gì?" → trả lời chính xác
+→ Conversation auto-summary khi history dài
+```
+
+---
 
 ## Kiến trúc
 
-```
-┌──────────────────────────────────────────────────┐
-│                   COMMANDER                       │
-│  Nhận goal → phân rã → điều phối → giám sát      │
-└──────────┬───────────────────────┬───────────────┘
-           │                       │
-  ┌────────▼────────┐    ┌────────▼────────┐
-  │   SUPERVISOR    │    │   SUPERVISOR    │
-  │  Quản lý nhóm   │    │  Quản lý nhóm   │
-  └───┬─────────┬───┘    └───┬─────────┬───┘
-  ┌───▼───┐ ┌──▼────┐   ┌───▼───┐ ┌──▼────┐
-  │SPECIAL│ │WORKER │   │SPECIAL│ │WORKER │
-  │ IST   │ │       │   │ IST   │ │       │
-  └───────┘ └───────┘   └───────┘ └───────┘
-```
+```mermaid
+graph LR
+    subgraph Input
+        TG[📱 Telegram Bot]
+        MCP[🔌 MCP Server<br/>66 tools]
+    end
 
-### Thành phần chính
+    subgraph Core
+        Q[📬 Queue<br/>5 concurrent]
+        P[⚡ Pipeline<br/>Knowledge → Think → Tools → Learn]
+        O[🔄 Orchestrator<br/>5s tick]
+    end
 
-| Module | Mô tả |
-|---|---|
-| **Agent Hierarchy** | Phân cấp Commander → Supervisor → Specialist → Worker |
-| **Orchestration Engine** | Task decomposition, DAG execution, auto-assign, retry, escalation |
-| **ClawTask** | Task lifecycle: pending → assigned → in_progress → completed/failed |
-| **Knowledge System** | Agent tự học từ kinh nghiệm, lưu lessons learned, query trước khi làm |
-| **Workflow Engine** | Business workflows: forms, validation, approval, notifications |
-| **Rules Engine** | Declarative JSON conditions (no eval), auto-approve/escalate |
-| **MCP Layer** | 66 MCP tools + 3 resources — giao diện chuẩn cho mọi agent |
-| **Proxy** | Multi-model routing: Commander → Claude, Workers → cheap API |
-| **Telegram Bot** | Transport layer — delegate mọi thứ cho Commander agent |
+    subgraph Data
+        DB[(🗄️ PostgreSQL<br/>24 tables)]
+        S3[📦 S3 Storage]
+        KB[📚 Knowledge<br/>Self-Learning]
+    end
 
-## Yêu cầu
+    subgraph LLM Pool
+        L1[🧠 Strong LLM<br/>Commander brain]
+        L2[⚡ Fast LLM<br/>Worker brain]
+    end
 
-- Node.js >= 20
-- npm
+    TG --> Q --> P
+    MCP --> P
+    P --> DB & S3 & KB
+    P --> L1 & L2
+    O --> P
+    KB -.->|đã học| P
 
-## Cài đặt
-
-```bash
-git clone <repo-url>
-cd OpenClaw
-npm install
+    style L1 fill:#4A90D9,color:#fff
+    style L2 fill:#2ECC71,color:#fff
+    style KB fill:#F39C12,color:#fff
 ```
 
-## Cấu hình
+> **LLM = não, Agent = nhân viên.** Cùng não, khác job description (system prompt + tools + quyền hạn).
 
-Copy `.env.example` → `.env` và điền:
-
-```bash
-cp .env.example .env
-```
-
-```env
-# Database
-DATABASE_URL=./data/openclaw.db
-
-# LLM — Commander (model mạnh)
-COMMANDER_API_BASE=https://api.anthropic.com
-COMMANDER_API_KEY=sk-ant-...
-COMMANDER_MODEL=claude-sonnet-4-20250514
-
-# LLM — Workers (model rẻ)
-WORKER_API_BASE=https://your-cheap-api.com/v1
-WORKER_API_KEY=your-key
-WORKER_MODEL=gpt-4o-mini
-
-# Proxy
-PROXY_PORT=3101
-
-# Telegram Bot
-TELEGRAM_BOT_TOKEN=your-bot-token
-TELEGRAM_DEFAULT_TENANT_ID=  # sẽ có sau khi chạy setup
-```
-
-## Khởi chạy
-
-### 1. Setup dữ liệu demo
-
-```bash
-npx tsx scripts/setup-demo.ts <YOUR_TELEGRAM_ID>
-```
-
-Script tạo:
-- Tenant "Demo Corp"
-- Workflow "Tạo Đơn Hàng" (form → confirm → complete)
-- Form template (tên KH, SĐT, sản phẩm, số lượng)
-- Business rule (đơn > 5M cần manager duyệt)
-- Commander + Sales Bot agents
-- Admin user (Telegram ID bạn cung cấp)
-
-Copy `TELEGRAM_DEFAULT_TENANT_ID` từ output vào `.env`.
-
-### 2. Chạy hệ thống
-
-```bash
-npx tsx src/index.ts
-```
-
-Sẽ start:
-- SQLite database + migrations
-- MCP server (66 tools, 3 resources)
-- Orchestrator tick loop (5s)
-- LLM Proxy (multi-model routing)
-- Telegram bot (long-polling)
-
-### 3. Build production
-
-```bash
-npm run build
-node dist/index.js
-```
-
-## Sử dụng
-
-### Telegram Bot
-
-Nhắn cho bot trên Telegram:
-
-| Tin nhắn | Bot làm gì |
-|---|---|
-| "xin chào" | AI trả lời tự nhiên |
-| "tạo quy trình chăm sóc KH" | Commander tạo workflow trong DB |
-| "viết tutorial cho sale mới" | Commander lưu tutorial vào knowledge base |
-| "xem danh sách quy trình" | Commander query DB, trả về danh sách |
-| "tạo đơn hàng" | Commander start workflow instance |
-| bất kỳ câu hỏi | Commander dùng LLM trả lời thông minh |
-
-**Admin** (role trong DB) có thể: tạo workflow, tutorial, rules, quản lý user roles.
-**User** thường: chỉ sử dụng workflow có sẵn, hỏi đáp.
-
-### MCP Server
-
-Thêm vào Claude Desktop config (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "openclaw": {
-      "command": "npx",
-      "args": ["tsx", "src/index.ts"],
-      "cwd": "/path/to/OpenClaw"
-    }
-  }
-}
-```
-
-66 tools available — xem chi tiết trong [ARCHITECTURE.md](ARCHITECTURE.md).
-
-### Proxy API
-
-Agents gọi LLM qua proxy để auto-track token + cost:
-
-```bash
-curl http://127.0.0.1:3101/v1/messages \
-  -H "Content-Type: application/json" \
-  -H "x-agent-id: agent-123" \
-  -H "x-task-id: task-456" \
-  -d '{"model":"claude-sonnet-4-20250514","messages":[{"role":"user","content":"Hello"}],"max_tokens":100}'
-```
-
-Proxy tự route:
-- Commander/Supervisor → Anthropic API
-- Worker/Specialist → Cheap API
+---
 
 ## Cấu trúc thư mục
 
 ```
-OpenClaw/
-├── src/
-│   ├── index.ts                    # Entry point
-│   ├── config.ts                   # Zod-validated env config
-│   ├── db/
-│   │   ├── schemas/                # 7 schema files, 22 tables
-│   │   ├── schema.ts               # Re-export all
-│   │   ├── connection.ts           # SQLite + WAL + Drizzle
-│   │   └── migrate.ts
-│   ├── modules/
-│   │   ├── agents/                 # Agent registration, heartbeat, performance
-│   │   ├── hierarchy/              # Closure table, authorization, promotion
-│   │   ├── tasks/                  # Task CRUD, lifecycle, dependencies
-│   │   ├── orchestration/          # Decision engine, decomposer, DAG executor, tick loop
-│   │   ├── messaging/              # Inter-agent communication
-│   │   ├── decisions/              # Audit trail
-│   │   ├── monitoring/             # Suspend, kill, budget, dashboard
-│   │   ├── knowledge/              # Self-learning, retrieval, scoring
-│   │   ├── workflows/              # Workflow engine, form engine, rules engine
-│   │   ├── tenants/                # Multi-tenant
-│   │   ├── integrations/           # Webhook, Telegram, Email connectors
-│   │   ├── conversations/          # Chat sessions, form collection
-│   │   ├── logs/                   # Structured task logs
-│   │   ├── notebooks/              # Namespaced key-value store
-│   │   └── analytics/              # Metrics, cost reports
-│   ├── mcp/
-│   │   ├── server.ts               # 66 tools, 3 resources
-│   │   ├── tools/                  # 15 tool files
-│   │   └── resources/              # 2 resource files
-│   ├── proxy/
-│   │   ├── proxy.service.ts        # Multi-model LLM proxy
-│   │   └── cost.tracker.ts         # Token accounting
-│   └── bot/
-│       ├── telegram.bot.ts         # Transport layer (long-polling)
-│       └── agent-bridge.ts         # Commander AI — tool calling
-├── scripts/
-│   └── setup-demo.ts              # Demo data + admin user setup
-├── tests/                          # 39 tests
-├── drizzle/                        # Generated migrations
-├── data/                           # SQLite DB (gitignored)
-├── ARCHITECTURE.md                 # Full architecture docs
-└── .env.example
+src/
+  ├── bot/                  Telegram bot + message queue + agent bridge
+  ├── db/                   PostgreSQL schemas (Drizzle ORM)
+  ├── mcp/                  MCP server + 66 tools
+  ├── proxy/                LLM proxy routing
+  └── modules/
+       ├── agents/          Agent templates, pool, runner
+       ├── collections/     Dynamic tables (CRUD)
+       ├── knowledge/       Self-learning knowledge base
+       ├── tasks/           Task lifecycle
+       ├── orchestration/   Task decomposition, DAG, auto-assign
+       ├── workflows/       Workflow + form + rules engine
+       ├── storage/         S3 + PDF/DOCX/XLSX extraction
+       ├── permissions/      Dynamic RBAC + approval flow + audit
+       ├── conversations/   Session state + form state + summary
+       ├── decisions/       Decision audit trail
+       ├── monitoring/      Health check, budget
+       └── ...
 ```
 
-## Database
+---
 
-22 tables trong SQLite:
+## Bot Commands
 
-| Nhóm | Tables |
-|---|---|
-| **Agents** | agents, agent_hierarchy, tenant_users |
-| **Tasks** | tasks, task_dependencies, task_logs |
-| **Orchestration** | messages, decisions, execution_plans |
-| **Storage** | notebooks, token_usage |
-| **Knowledge** | knowledge_entries, knowledge_votes, knowledge_applications |
-| **Business** | tenants, workflow_templates, form_templates, business_rules, workflow_instances, workflow_approvals, integrations, conversation_sessions |
+| Command | Role | Mô tả |
+|---------|------|--------|
+| `/start` | all | Xem hướng dẫn |
+| `/register` | guest | Đăng ký sử dụng |
+| `/approve <id>` | admin | Duyệt đăng ký |
+| `/reject <id>` | admin | Từ chối đăng ký |
+| `/pending` | admin | Xem đăng ký chờ duyệt |
+| `/grant <user> <resource> <access>` | admin/manager (cần M) | Cấp quyền (CRUDM/CRUD/CRU/CR/R) |
+| `/deny <requestId>` | admin/manager | Từ chối yêu cầu quyền |
+| `/revoke <user> <resource>` | admin/manager | Thu hồi quyền |
+| `/permissions` | admin/manager | Xem yêu cầu quyền đang chờ |
 
-## Tests
+---
+
+## Testing Guide
+
+### 1. Form State — multi-step form
+
+```
+User: "nhập đơn hàng"
+→ Bot gọi start_form → hỏi field đầu tiên
+→ Nhập 3-4 field liên tiếp
+→ Hỏi "bước 1 tôi nhập gì?" → bot trả lời đúng từ DB
+→ "sửa bước 2 thành ABC" → bot update DB
+→ Tắt app, quay lại "tiếp tục nhập đơn" → resume đúng chỗ
+```
+
+### 2. Permission — quyền mặc định
+
+```
+Manager nhắn: "tạo form mới tên Test" → OK (có quyền C trên form_templates)
+Sales nhắn: "xoá form Test" → Từ chối (sales không có D trên form_templates)
+Admin nhắn: bất kỳ → OK (full quyền)
+```
+
+### 3. Approval Flow — xin quyền
+
+```
+Sales nhắn: "tạo workflow mới"
+→ Bot: "Bạn chưa có quyền. Gửi yêu cầu cho [Manager]?"
+→ Sales: "ok"
+→ Manager nhận: "🔔 [Sales] xin quyền CRU trên workflow_templates"
+→ Manager: /grant <sales_id> workflow_templates CRU
+→ Sales nhận: "🔓 Bạn đã được cấp quyền CRU trên workflow_templates"
+→ Sales tự tạo workflow từ giờ — không cần hỏi lại
+```
+
+### 4. Grant/Revoke commands
+
+```
+/grant kristina knowledge_entries CRUD     → cấp quyền
+/revoke kristina knowledge_entries          → thu hồi
+/permissions                                → xem yêu cầu đang chờ
+```
+
+### 5. Conversation Summary
+
+```
+Chat > 15 messages → hệ thống tự tóm tắt
+→ Prompt nhẹ hơn, token ít hơn
+→ Bot vẫn nhớ context quan trọng
+```
+
+---
+
+## Triển khai
+
+### Yêu cầu
+
+- **Node.js** >= 22
+- **PostgreSQL** >= 16
+- **LLM CLI** (cho Commander brain — optional)
+- **S3 storage** (cho file upload)
+
+### Quick Start
 
 ```bash
-npm test           # chạy tất cả
-npm run test:watch # watch mode
-```
+# 1. Clone
+git clone https://github.com/TungND2k2/OpenClow.git
+cd OpenClow && npm install
 
-6 test suites, 39 tests:
-- hierarchy (authorization, closure table, promotion)
-- tasks (lifecycle, dependencies, depth limit)
-- rules-engine (AND/OR/NOT, nested, operators)
-- form-engine (validation, conditional fields, chat parsing)
-- knowledge (store, retrieve, scoring, extraction)
-- integration-e2e (goal→decompose→execute, cost tracking, workflow)
-
-## Deploy
-
-### Docker (recommended)
-
-```dockerfile
-FROM node:22-slim
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --production
-COPY . .
-RUN npm run build
-RUN mkdir -p data
-CMD ["node", "dist/index.js"]
-```
-
-```bash
-docker build -t openclaw .
-docker run -d --name openclaw \
-  -v openclaw-data:/app/data \
-  --env-file .env \
-  openclaw
-```
-
-### Linux server
-
-```bash
-# Install Node.js 22
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs
-
-# Clone + install
-git clone <repo> /opt/openclaw
-cd /opt/openclaw
-npm ci
-
-# Setup
+# 2. Config
 cp .env.example .env
-# edit .env with your config
-npx tsx scripts/setup-demo.ts <TELEGRAM_ID>
+# Sửa .env: DATABASE_URL, TELEGRAM_BOT_TOKEN, S3 keys
 
-# Run with pm2
-npm i -g pm2
-pm2 start "npx tsx src/index.ts" --name openclaw
-pm2 save
-pm2 startup
+# 3. Setup
+npx tsx scripts/setup-demo.ts <YOUR_TELEGRAM_ID>
+# Copy TELEGRAM_DEFAULT_TENANT_ID vào .env
+
+# 4. Run
+npx tsx src/index.ts
 ```
+
+### Production (Ubuntu)
+
+```bash
+# Cài dependencies
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt install -y nodejs postgresql
+npm install -g pm2 @anthropic-ai/claude-code
+
+# PostgreSQL setup
+sudo -u postgres createuser openclaw -P    # password: openclaw123
+sudo -u postgres createdb openclaw -O openclaw
+
+# Clone + deploy
+cd /opt && git clone https://github.com/TungND2k2/OpenClow.git
+cd OpenClow && npm install
+cp .env.example .env && nano .env
+
+# Setup + start
+npx tsx scripts/setup-demo.ts <TELEGRAM_ID>
+pm2 start "npx tsx src/index.ts" --name openclaw
+pm2 save && pm2 startup
+
+# LLM CLI login (cho Commander brain)
+# Cấu hình theo provider bạn dùng
+```
+
+### Update
+
+```bash
+cd /opt/OpenClow && git pull && npm install && pm2 restart openclaw
+```
+
+---
+
+## .env
+
+```env
+# Database (PostgreSQL)
+DATABASE_URL=postgresql://openclaw:openclaw123@localhost:5432/openclaw
+
+# Server
+NODE_ENV=production
+
+# Telegram
+TELEGRAM_BOT_TOKEN=your-bot-token
+TELEGRAM_DEFAULT_TENANT_ID=   # từ setup-demo
+
+# S3 Storage
+S3_ENDPOINT=https://s3.example.com
+S3_REGION=us-east-1
+S3_BUCKET=your-bucket
+S3_ACCESS_KEY=
+S3_SECRET_KEY=
+
+# LLM (optional — Workers dùng fast API)
+WORKER_API_BASE=https://api.openai.com/v1
+WORKER_API_KEY=
+WORKER_MODEL=gpt-4o-mini
+```
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Node.js 22 + TypeScript |
+| Database | PostgreSQL 16 + Drizzle ORM |
+| MCP | @modelcontextprotocol/sdk |
+| AI | LLM API (OpenAI-compatible) |
+| Bot | Telegram Bot API (long-polling) |
+| Storage | S3-compatible |
+| Process | PM2 |
+
+---
+
+## Docs
+
+| Doc | Nội dung |
+|-----|----------|
+| [FORM-STATE.md](docs/FORM-STATE.md) | Multi-step form persistent — summary + form state |
+| [ROADMAP-LEARNED-ROUTING.md](docs/ROADMAP-LEARNED-ROUTING.md) | Tự học engine routing CLI/fast-api (PENDING) |
+
+---
+
+## Changelog
+
+### v0.5.0 — Dynamic Permissions + Audit Trail
+- **`db_query` meta-tool**: 1 tool generic thay 20+ tools riêng — AI tự CRUD bất kỳ resource
+- **Permission check**: mọi thao tác qua `db_query` đều check quyền theo role
+- **Grant flow**: `/grant user resource CRUD` — cấp quyền vĩnh viễn, `/revoke` thu hồi
+- **Approval request**: user không đủ quyền → hệ thống gửi yêu cầu cho `reports_to` (1 người)
+- **Owner tracking**: `created_by_user_id`, `created_by_name`, `updated_by_*` trên mọi record
+- **Audit trail**: mọi thao tác CRUD lưu log (ai, làm gì, khi nào)
+- **Commands mới**: `/grant`, `/deny`, `/revoke`, `/permissions`
+
+### v0.4.0 — Form State + Conversation Summary
+- **Conversation Summary**: auto tóm tắt mỗi 10 messages → giữ summary + 5 recent → tiết kiệm tokens
+- **Form State**: multi-step form lưu per-user session trong DB → không mất data khi history dài
+- **Tools mới**: `start_form`, `update_form_field`, `get_form_state`, `cancel_form`
+- **Auto-save**: form complete → `add_row` vào collection (TODO)
+
+### v0.3.0 — PostgreSQL + Smart Search
+- Chuyển SQLite → **PostgreSQL** (data persistent, remote access)
+- **Smart search**: `search_all(keyword)` filter DB trước khi gửi LLM
+- **Pagination**: > 20 rows → trả summary + hint xem tiếp
+- **Knowledge dedup**: merge rules cùng intent, tăng `usage_count`
+
+### v0.2.0 — Agent System + Self-Learning
+- **Agent Templates**: tạo agent qua chat, không code
+- **AgentPool**: Commander + Workers spawn từ templates
+- **Self-learning**: 34 rules tự học từ hội thoại (intent-based merge)
+- **Business Rules**: phân loại task theo bộ phận (Sản xuất, Marketing, Sales, Kế toán)
+- **Dynamic Collections**: admin tạo bảng qua chat, CRUD data thật trong DB
+- **Image Vision**: phân tích ảnh qua LLM CLI + Read tool
+- **File parsing**: PDF (mutool fallback), DOCX (mammoth), XLSX
+- **S3 Storage**: upload files từ Telegram → S3
+
+### v0.1.0 — Foundation
+- Telegram bot + message queue (5 concurrent)
+- MCP server (66 tools)
+- Orchestrator (health check, task dispatch, DAG rollup)
+- Role-based access (admin → manager → sales/staff/user)
+- User registration (`/register` → admin approve)
+- Progress messages (edit cùng 1 message)
+
+---
 
 ## License
 
-Private — OpenClaw
+Private — OpenClaw by TungND2k2

@@ -10,14 +10,14 @@ let _server: ReturnType<typeof createServer> | null = null;
  * Commander → Anthropic API (Claude Max)
  * Workers/Specialists → Cheap OpenAI-compatible API
  */
-function getRouting(agentId: string): {
+async function getRouting(agentId: string): Promise<{
   targetUrl: string;
   apiKey: string | undefined;
   model: string;
   format: "anthropic" | "openai";
-} {
+}> {
   const config = getConfig();
-  const agent = agentId ? getAgent(agentId) : null;
+  const agent = agentId ? await getAgent(agentId) : null;
 
   if (agent?.role === "commander" || agent?.role === "supervisor") {
     return {
@@ -130,7 +130,7 @@ export function startProxy(): void {
 
       // Budget check
       if (agentId) {
-        const budget = checkBudget(agentId);
+        const budget = await checkBudget(agentId);
         if (!budget.withinBudget) {
           res.writeHead(402, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Budget exceeded", spent: budget.spent, budget: budget.budget }));
@@ -139,7 +139,7 @@ export function startProxy(): void {
       }
 
       // Route based on agent role
-      const routing = getRouting(agentId);
+      const routing = await getRouting(agentId);
       const model = body.model ?? routing.model;
 
       let targetUrl: string;
@@ -176,7 +176,7 @@ export function startProxy(): void {
       if (agentId && responseJson) {
         const usage = extractUsage(responseJson, routing.format);
         if (usage.inputTokens > 0 || usage.outputTokens > 0) {
-          recordUsage({
+          await recordUsage({
             agentId,
             taskId,
             model,

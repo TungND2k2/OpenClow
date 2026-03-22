@@ -31,10 +31,10 @@ interface AuthContext {
  * Assert that an agent is authorized to perform an action.
  * Throws AuthorizationError if not.
  */
-export function assertAuthorized(ctx: AuthContext): void {
+export async function assertAuthorized(ctx: AuthContext): Promise<void> {
   const db = getDb();
 
-  const actingAgent = db
+  const actingAgent = (await db
     .select({
       role: agents.role,
       authorityLevel: agents.authorityLevel,
@@ -42,7 +42,7 @@ export function assertAuthorized(ctx: AuthContext): void {
     })
     .from(agents)
     .where(eq(agents.id, ctx.actingAgentId))
-    .get();
+    .limit(1))[0];
 
   if (!actingAgent) {
     throw new AuthorizationError(
@@ -86,7 +86,7 @@ export function assertAuthorized(ctx: AuthContext): void {
     if (
       needsSubtreeCheck &&
       actingAgent.role !== "commander" &&
-      !isAncestorOf(ctx.actingAgentId, ctx.targetAgentId)
+      !(await isAncestorOf(ctx.actingAgentId, ctx.targetAgentId))
     ) {
       throw new AuthorizationError(
         ctx.actingAgentId,
@@ -114,9 +114,9 @@ export function assertAuthorized(ctx: AuthContext): void {
 /**
  * Check authorization without throwing — returns true/false.
  */
-export function isAuthorized(ctx: AuthContext): boolean {
+export async function isAuthorized(ctx: AuthContext): Promise<boolean> {
   try {
-    assertAuthorized(ctx);
+    await assertAuthorized(ctx);
     return true;
   } catch {
     return false;

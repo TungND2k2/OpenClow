@@ -20,7 +20,7 @@ export function registerKnowledgeTools(server: McpServer): void {
     const db = getDb();
     const now = nowMs();
     const id = newId();
-    db.insert(knowledgeEntries).values({
+    await db.insert(knowledgeEntries).values({
       id,
       type: params.type,
       title: params.title,
@@ -37,7 +37,7 @@ export function registerKnowledgeTools(server: McpServer): void {
       downvotes: 0,
       createdAt: now,
       updatedAt: now,
-    }).run();
+    });
     return { content: [{ type: "text", text: JSON.stringify({ id, title: params.title }, null, 2) }] };
   });
 
@@ -52,11 +52,10 @@ export function registerKnowledgeTools(server: McpServer): void {
     if (params.domain) conditions.push(eq(knowledgeEntries.domain, params.domain));
     if (params.scope) conditions.push(eq(knowledgeEntries.scope, params.scope));
 
-    const rows = db.select().from(knowledgeEntries)
+    const rows = await db.select().from(knowledgeEntries)
       .where(and(...conditions))
       .orderBy(desc(knowledgeEntries.relevanceScore))
-      .limit(params.limit ?? 10)
-      .all();
+      .limit(params.limit ?? 10);
 
     let result = rows;
     if (params.tags && params.tags.length > 0) {
@@ -78,17 +77,17 @@ export function registerKnowledgeTools(server: McpServer): void {
     const now = nowMs();
     const id = newId();
     try {
-      db.insert(knowledgeVotes).values({
+      await db.insert(knowledgeVotes).values({
         id,
         knowledgeId: params.knowledge_id,
         agentId: params.agent_id,
         vote: params.vote,
         comment: params.comment ?? null,
         createdAt: now,
-      }).run();
+      });
       // Update counts
       const field = params.vote > 0 ? "upvotes" : "downvotes";
-      db.run(sql`UPDATE knowledge_entries SET ${sql.raw(field)} = ${sql.raw(field)} + 1 WHERE id = ${params.knowledge_id}`);
+      await db.execute(sql`UPDATE knowledge_entries SET ${sql.raw(field)} = ${sql.raw(field)} + 1 WHERE id = ${params.knowledge_id}`);
       return { content: [{ type: "text", text: "Vote recorded" }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: e.message }], isError: true };
@@ -99,7 +98,7 @@ export function registerKnowledgeTools(server: McpServer): void {
     knowledge_id: z.string(),
   }, async ({ knowledge_id }) => {
     const db = getDb();
-    const row = db.select().from(knowledgeEntries).where(eq(knowledgeEntries.id, knowledge_id)).get();
+    const row = (await db.select().from(knowledgeEntries).where(eq(knowledgeEntries.id, knowledge_id)).limit(1))[0];
     if (!row) return { content: [{ type: "text", text: "Not found" }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(row, null, 2) }] };
   });
@@ -110,10 +109,9 @@ export function registerKnowledgeTools(server: McpServer): void {
     agent_id: z.string(),
   }, async ({ old_knowledge_id, new_knowledge_id }) => {
     const db = getDb();
-    db.update(knowledgeEntries)
+    await db.update(knowledgeEntries)
       .set({ supersededById: new_knowledge_id, updatedAt: nowMs() })
-      .where(eq(knowledgeEntries.id, old_knowledge_id))
-      .run();
+      .where(eq(knowledgeEntries.id, old_knowledge_id));
     return { content: [{ type: "text", text: "OK" }] };
   });
 
@@ -124,18 +122,16 @@ export function registerKnowledgeTools(server: McpServer): void {
     const conditions: any[] = [];
     if (params.domain) conditions.push(eq(knowledgeEntries.domain, params.domain));
 
-    const total = db.select({ count: sql<number>`count(*)` })
+    const total = (await db.select({ count: sql<number>`count(*)` })
       .from(knowledgeEntries)
-      .where(conditions.length ? and(...conditions) : undefined)
-      .get();
+      .where(conditions.length ? and(...conditions) : undefined))[0];
 
-    const byType = db.select({
+    const byType = await db.select({
       type: knowledgeEntries.type,
       count: sql<number>`count(*)`,
     }).from(knowledgeEntries)
       .where(conditions.length ? and(...conditions) : undefined)
-      .groupBy(knowledgeEntries.type)
-      .all();
+      .groupBy(knowledgeEntries.type);
 
     return { content: [{ type: "text", text: JSON.stringify({ total: total?.count ?? 0, byType }, null, 2) }] };
   });

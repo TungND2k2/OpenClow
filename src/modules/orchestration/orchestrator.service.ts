@@ -23,7 +23,7 @@ export interface TickResult {
 /**
  * Run one orchestrator tick — the autonomous heartbeat of the system.
  */
-export function tick(): TickResult {
+export async function tick(): Promise<TickResult> {
   const result: TickResult = {
     offlineAgents: [],
     satisfiedDeps: 0,
@@ -40,7 +40,7 @@ export function tick(): TickResult {
   // ── 1. HEALTH CHECK ──────────────────────────────────────
   const db = getDb();
   const heartbeatThreshold = now - config.HEARTBEAT_TIMEOUT_MS;
-  const staleAgents = db
+  const staleAgents = await db
     .select({ id: agents.id, name: agents.name })
     .from(agents)
     .where(
@@ -48,15 +48,14 @@ export function tick(): TickResult {
         sql`${agents.status} IN ('idle', 'busy')`,
         sql`${agents.lastHeartbeat} < ${heartbeatThreshold}`
       )
-    )
-    .all();
+    );
 
   for (const agent of staleAgents) {
-    updateAgentStatus(agent.id, "offline");
+    await updateAgentStatus(agent.id, "offline");
     result.offlineAgents.push(agent.id);
 
     // Reassign their in-progress tasks
-    const agentTasks = db
+    const agentTasks = await db
       .select({ id: tasks.id })
       .from(tasks)
       .where(
@@ -64,21 +63,19 @@ export function tick(): TickResult {
           eq(tasks.assignedAgentId, agent.id),
           sql`${tasks.status} IN ('assigned', 'in_progress')`
         )
-      )
-      .all();
+      );
 
     for (const task of agentTasks) {
-      db.update(tasks)
+      await db.update(tasks)
         .set({
           status: "pending" as const,
           assignedAgentId: null,
           assignedAt: null,
           startedAt: null,
         })
-        .where(eq(tasks.id, task.id))
-        .run();
+        .where(eq(tasks.id, task.id));
 
-      recordDecision({
+      await recordDecision({
         agentId: "system",
         decisionType: "reassign",
         taskId: task.id,
@@ -89,12 +86,12 @@ export function tick(): TickResult {
   }
 
   // ── 2. DEPENDENCY RESOLUTION ─────────────────────────────
-  const depResult = resolveDependencies();
+  const depResult = await resolveDependencies();
   result.satisfiedDeps = depResult.satisfiedCount;
   result.unblockedTasks = depResult.unblockedTaskIds;
 
   // ── 3. PENDING TASK ASSIGNMENT ───────────────────────────
-  const pendingTasks = db
+  const pendingTasks = await db
     .select()
     .from(tasks)
     .where(
@@ -104,23 +101,22 @@ export function tick(): TickResult {
       )
     )
     .orderBy(sql`${tasks.priority} DESC, ${tasks.urgency} DESC, ${tasks.createdAt} ASC`)
-    .limit(20)
-    .all();
+    .limit(20);
 
   for (const task of pendingTasks) {
     const requiredCaps =
       (task.requiredCapabilities as unknown as string[]) ?? [];
-    const best = selectBestAgentGlobal(requiredCaps);
+    const best = await selectBestAgentGlobal(requiredCaps);
 
     if (best) {
-      assignTask(task.id, best.agentId, "system");
+      await assignTask(task.id, best.agentId, "system");
       result.assignedTasks.push({
         taskId: task.id,
         agentId: best.agentId,
       });
 
       // Send command message to agent
-      sendMessage({
+      await sendMessage({
         fromAgentId: "system",
         toAgentId: best.agentId,
         type: "command",
@@ -132,7 +128,7 @@ export function tick(): TickResult {
         },
       });
 
-      recordDecision({
+      await recordDecision({
         agentId: "system",
         decisionType: "assign",
         taskId: task.id,
@@ -144,12 +140,12 @@ export function tick(): TickResult {
   }
 
   // ── 4. PROGRESS ROLLUP ───────────────────────────────────
-  const rollup = rollupParentTasks();
+  const rollup = await rollupParentTasks();
   result.completedParents = rollup.completedParents;
   result.blockedParents = rollup.blockedParents;
 
   // ── 5. BUDGET CHECK ──────────────────────────────────────
-  const overBudget = db
+  const overBudget = await db
     .select({ id: agents.id })
     .from(agents)
     .where(
@@ -158,14 +154,13 @@ export function tick(): TickResult {
         sql`${agents.costSpentUsd} > ${agents.costBudgetUsd}`,
         sql`${agents.status} NOT IN ('suspended', 'deactivated')`
       )
-    )
-    .all();
+    );
 
   for (const agent of overBudget) {
-    updateAgentStatus(agent.id, "suspended");
+    await updateAgentStatus(agent.id, "suspended");
     result.overBudgetAgents.push(agent.id);
 
-    recordDecision({
+    await recordDecision({
       agentId: "system",
       decisionType: "kill",
       targetAgentId: agent.id,

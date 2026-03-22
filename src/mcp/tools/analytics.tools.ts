@@ -18,20 +18,20 @@ export function registerAnalyticsTools(server: McpServer): void {
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const total = db.select({ count: sql<number>`count(*)` }).from(tasks).where(where).get();
-    const byStatus = db.select({
+    const total = (await db.select({ count: sql<number>`count(*)` }).from(tasks).where(where))[0];
+    const byStatus = await db.select({
       status: tasks.status,
       count: sql<number>`count(*)`,
-    }).from(tasks).where(where).groupBy(tasks.status).all();
+    }).from(tasks).where(where).groupBy(tasks.status);
 
-    const avgDuration = db.select({
+    const avgDuration = (await db.select({
       avg: sql<number>`avg(${tasks.completedAt} - ${tasks.startedAt})`,
     }).from(tasks).where(
       and(
         ...(conditions.length ? conditions : []),
         sql`${tasks.completedAt} IS NOT NULL AND ${tasks.startedAt} IS NOT NULL`
       )
-    ).get();
+    ))[0];
 
     return { content: [{ type: "text", text: JSON.stringify({
       total: total?.count ?? 0,
@@ -54,26 +54,26 @@ export function registerAnalyticsTools(server: McpServer): void {
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const totals = db.select({
+    const totals = (await db.select({
       totalCost: sql<number>`COALESCE(SUM(${tokenUsage.costUsd}), 0)`,
       totalInput: sql<number>`COALESCE(SUM(${tokenUsage.inputTokens}), 0)`,
       totalOutput: sql<number>`COALESCE(SUM(${tokenUsage.outputTokens}), 0)`,
       count: sql<number>`count(*)`,
-    }).from(tokenUsage).where(where).get();
+    }).from(tokenUsage).where(where))[0];
 
     let breakdown: any[] = [];
     if (params.group_by === "agent") {
-      breakdown = db.select({
+      breakdown = await db.select({
         agentId: tokenUsage.agentId,
         cost: sql<number>`SUM(${tokenUsage.costUsd})`,
         requests: sql<number>`count(*)`,
-      }).from(tokenUsage).where(where).groupBy(tokenUsage.agentId).all();
+      }).from(tokenUsage).where(where).groupBy(tokenUsage.agentId);
     } else if (params.group_by === "model") {
-      breakdown = db.select({
+      breakdown = await db.select({
         model: tokenUsage.model,
         cost: sql<number>`SUM(${tokenUsage.costUsd})`,
         requests: sql<number>`count(*)`,
-      }).from(tokenUsage).where(where).groupBy(tokenUsage.model).all();
+      }).from(tokenUsage).where(where).groupBy(tokenUsage.model);
     }
 
     return { content: [{ type: "text", text: JSON.stringify({ ...totals, breakdown }, null, 2) }] };

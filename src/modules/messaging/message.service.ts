@@ -21,7 +21,7 @@ function toRecord(row: any): MessageRecord {
 /**
  * Send a message to another agent.
  */
-export function sendMessage(input: SendMessageInput): MessageRecord {
+export async function sendMessage(input: SendMessageInput): Promise<MessageRecord> {
   const db = getDb();
   const now = nowMs();
   const id = newId();
@@ -41,7 +41,7 @@ export function sendMessage(input: SendMessageInput): MessageRecord {
     acknowledgedAt: null,
   };
 
-  db.insert(messages).values(record).run();
+  await db.insert(messages).values(record);
 
   return {
     ...record,
@@ -53,12 +53,12 @@ export function sendMessage(input: SendMessageInput): MessageRecord {
 /**
  * Poll pending messages for an agent.
  */
-export function checkMessages(filters: {
+export async function checkMessages(filters: {
   agentId: string;
   type?: MessageType;
   since?: number;
   limit?: number;
-}): MessageRecord[] {
+}): Promise<MessageRecord[]> {
   const db = getDb();
   const now = nowMs();
   const conditions: any[] = [
@@ -74,30 +74,27 @@ export function checkMessages(filters: {
   }
 
   // Expire old messages first
-  db.update(messages)
+  await db.update(messages)
     .set({ status: "expired" as const })
     .where(
       and(
         eq(messages.status, "pending"),
         sql`${messages.expiresAt} IS NOT NULL AND ${messages.expiresAt} < ${now}`
       )
-    )
-    .run();
+    );
 
-  const rows = db
+  const rows = await db
     .select()
     .from(messages)
     .where(and(...conditions))
     .orderBy(desc(messages.priority), messages.createdAt)
-    .limit(filters.limit ?? 20)
-    .all();
+    .limit(filters.limit ?? 20);
 
   // Mark as delivered
   for (const row of rows) {
-    db.update(messages)
+    await db.update(messages)
       .set({ status: "delivered" as const, deliveredAt: now })
-      .where(eq(messages.id, row.id))
-      .run();
+      .where(eq(messages.id, row.id));
   }
 
   return rows.map(toRecord);
@@ -106,60 +103,58 @@ export function checkMessages(filters: {
 /**
  * Acknowledge a message.
  */
-export function acknowledgeMessage(
+export async function acknowledgeMessage(
   messageId: string,
   agentId: string
-): void {
+): Promise<void> {
   const db = getDb();
   const now = nowMs();
 
-  const msg = db
+  const msg = (await db
     .select({ toAgentId: messages.toAgentId, status: messages.status })
     .from(messages)
     .where(eq(messages.id, messageId))
-    .get();
+    .limit(1))[0];
 
   if (!msg) throw new Error(`Message ${messageId} not found`);
   if (msg.toAgentId !== agentId) {
     throw new Error(`Message ${messageId} is not addressed to agent ${agentId}`);
   }
 
-  db.update(messages)
+  await db.update(messages)
     .set({ status: "acknowledged" as const, acknowledgedAt: now })
-    .where(eq(messages.id, messageId))
-    .run();
+    .where(eq(messages.id, messageId));
 }
 
 /**
  * Broadcast a message to all agents in a scope.
  * Scope: 'all' | 'subordinates' | 'level:worker' | 'level:specialist' etc.
  */
-export function broadcast(
+export async function broadcast(
   fromAgentId: string,
   scope: string,
   payload: Record<string, unknown>,
   taskId?: string
-): MessageRecord[] {
+): Promise<MessageRecord[]> {
   const db = getDb();
   let targetIds: string[] = [];
 
   if (scope === "all") {
     // All agents except sender — get from hierarchy
-    const allDesc = getDescendants(fromAgentId);
+    const allDesc = await getDescendants(fromAgentId);
     targetIds = allDesc.map((d) => d.descendantId);
   } else if (scope === "subordinates") {
-    const descendants = getDescendants(fromAgentId);
+    const descendants = await getDescendants(fromAgentId);
     targetIds = descendants.map((d) => d.descendantId);
   } else if (scope.startsWith("level:")) {
     const level = scope.replace("level:", "");
     // Get subordinates then filter by role
-    const { agents } = require("../../db/schema.js");
-    const descendants = getDescendants(fromAgentId);
+    const { agents } = await import("../../db/schema.js");
+    const descendants = await getDescendants(fromAgentId);
     const descIds = descendants.map((d) => d.descendantId);
-    const agentRows = db
+    const agentRows = (await db
       .select({ id: agents.id, role: agents.role })
-      .from(agents)
-      .all()
+      .from(agents))
       .filter((a: any) => descIds.includes(a.id) && a.role === level);
     targetIds = agentRows.map((a: any) => a.id);
   }
@@ -167,7 +162,7 @@ export function broadcast(
   const sent: MessageRecord[] = [];
   for (const toId of targetIds) {
     sent.push(
-      sendMessage({
+      await sendMessage({
         fromAgentId,
         toAgentId: toId,
         type: "broadcast",
@@ -184,12 +179,12 @@ export function broadcast(
 /**
  * Get message by ID.
  */
-export function getMessage(messageId: string): MessageRecord | null {
+export async function getMessage(messageId: string): Promise<MessageRecord | null> {
   const db = getDb();
-  const row = db
+  const row = (await db
     .select()
     .from(messages)
     .where(eq(messages.id, messageId))
-    .get();
+    .limit(1))[0];
   return row ? toRecord(row) : null;
 }

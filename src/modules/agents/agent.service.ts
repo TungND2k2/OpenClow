@@ -17,11 +17,13 @@ export interface CreateAgentInput {
   maxConcurrentTasks?: number;
   costBudgetUsd?: number;
   config?: Record<string, unknown>;
+  templateId?: string;
 }
 
 export interface AgentRecord {
   id: string;
   name: string;
+  templateId: string | null;
   role: Role;
   authorityLevel: number;
   capabilities: string[];
@@ -41,7 +43,7 @@ export interface AgentRecord {
 /**
  * Register a new agent.
  */
-export function registerAgent(input: CreateAgentInput): AgentRecord {
+export async function registerAgent(input: CreateAgentInput): Promise<AgentRecord> {
   const db = getDb();
   const now = nowMs();
   const role = input.role ?? "worker";
@@ -50,11 +52,11 @@ export function registerAgent(input: CreateAgentInput): AgentRecord {
 
   // Enforce single commander
   if (role === "commander") {
-    const existing = db
+    const existing = (await db
       .select({ id: agents.id })
       .from(agents)
       .where(eq(agents.role, "commander"))
-      .get();
+      .limit(1))[0];
     if (existing) {
       throw new Error(
         `Commander already exists (${existing.id}). Only one commander allowed.`
@@ -65,6 +67,7 @@ export function registerAgent(input: CreateAgentInput): AgentRecord {
   const record = {
     id,
     name: input.name,
+    templateId: input.templateId ?? null,
     role,
     authorityLevel,
     capabilities: JSON.stringify(input.capabilities),
@@ -82,10 +85,10 @@ export function registerAgent(input: CreateAgentInput): AgentRecord {
     updatedAt: now,
   };
 
-  db.insert(agents).values(record).run();
+  await db.insert(agents).values(record);
 
   // Insert hierarchy closure table entries
-  insertHierarchyEntries(id, input.parentAgentId ?? null);
+  await insertHierarchyEntries(id, input.parentAgentId ?? null);
 
   return {
     ...record,
@@ -97,15 +100,15 @@ export function registerAgent(input: CreateAgentInput): AgentRecord {
 /**
  * Update agent heartbeat timestamp and set status to idle if registering.
  */
-export function heartbeat(agentId: string): void {
+export async function heartbeat(agentId: string): Promise<void> {
   const db = getDb();
   const now = nowMs();
 
-  const agent = db
+  const agent = (await db
     .select({ status: agents.status })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+    .limit(1))[0];
 
   if (!agent) throw new Error(`Agent ${agentId} not found`);
 
@@ -114,26 +117,25 @@ export function heartbeat(agentId: string): void {
       ? ("idle" as const)
       : undefined;
 
-  db.update(agents)
+  await db.update(agents)
     .set({
       lastHeartbeat: now,
       updatedAt: now,
       ...(newStatus ? { status: newStatus } : {}),
     })
-    .where(eq(agents.id, agentId))
-    .run();
+    .where(eq(agents.id, agentId));
 }
 
 /**
  * Get agent by ID.
  */
-export function getAgent(agentId: string): AgentRecord | null {
+export async function getAgent(agentId: string): Promise<AgentRecord | null> {
   const db = getDb();
-  const row = db
+  const row = (await db
     .select()
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+    .limit(1))[0];
 
   if (!row) return null;
 
@@ -147,15 +149,13 @@ export function getAgent(agentId: string): AgentRecord | null {
 /**
  * List agents with optional filters.
  */
-export function listAgents(filters?: {
+export async function listAgents(filters?: {
   status?: string;
   role?: string;
-}): AgentRecord[] {
+}): Promise<AgentRecord[]> {
   const db = getDb();
 
-  let query = db.select().from(agents);
-
-  const rows = query.all();
+  const rows = await db.select().from(agents);
 
   let result = rows;
   if (filters?.status) {
@@ -175,27 +175,26 @@ export function listAgents(filters?: {
 /**
  * Update agent status.
  */
-export function updateAgentStatus(
+export async function updateAgentStatus(
   agentId: string,
   status: "registering" | "idle" | "busy" | "suspended" | "offline" | "deactivated"
-): void {
+): Promise<void> {
   const db = getDb();
-  db.update(agents)
+  await db.update(agents)
     .set({ status, updatedAt: nowMs() })
-    .where(eq(agents.id, agentId))
-    .run();
+    .where(eq(agents.id, agentId));
 }
 
 /**
  * Update performance score after task completion.
  * Uses exponential moving average: new = old * 0.9 + (success ? 0.1 : 0.0)
  */
-export function updatePerformance(
+export async function updatePerformance(
   agentId: string,
   success: boolean
-): void {
+): Promise<void> {
   const db = getDb();
-  const agent = db
+  const agent = (await db
     .select({
       performanceScore: agents.performanceScore,
       tasksCompleted: agents.tasksCompleted,
@@ -203,14 +202,14 @@ export function updatePerformance(
     })
     .from(agents)
     .where(eq(agents.id, agentId))
-    .get();
+    .limit(1))[0];
 
   if (!agent) return;
 
   const newScore =
     agent.performanceScore * 0.9 + (success ? 0.1 : 0.0);
 
-  db.update(agents)
+  await db.update(agents)
     .set({
       performanceScore: newScore,
       tasksCompleted: success
@@ -221,6 +220,5 @@ export function updatePerformance(
         : agent.tasksFailed + 1,
       updatedAt: nowMs(),
     })
-    .where(eq(agents.id, agentId))
-    .run();
+    .where(eq(agents.id, agentId));
 }

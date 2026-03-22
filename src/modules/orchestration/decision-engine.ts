@@ -20,13 +20,13 @@ function jaccard(a: string[], b: string[]): number {
  * Score agents for a task and return ranked list.
  * Weights: capability 0.4, availability 0.3, performance 0.2, cost 0.1
  */
-export function scoreAgents(
+export async function scoreAgents(
   taskRequiredCapabilities: string[],
   candidateAgentIds?: string[]
-): AgentScore[] {
+): Promise<AgentScore[]> {
   const db = getDb();
 
-  let agentRows = db
+  let agentRows = (await db
     .select({
       id: agents.id,
       capabilities: agents.capabilities,
@@ -36,8 +36,7 @@ export function scoreAgents(
       costBudgetUsd: agents.costBudgetUsd,
       costSpentUsd: agents.costSpentUsd,
     })
-    .from(agents)
-    .all()
+    .from(agents))
     .filter(
       (a) =>
         a.status === "idle" || a.status === "busy"
@@ -63,13 +62,12 @@ export function scoreAgents(
     if (capabilityMatch === 0 && taskRequiredCapabilities.length > 0) continue;
 
     // Count active tasks for this agent
-    const activeCount = db
+    const activeCount = (await db
       .select({ count: sql<number>`count(*)` })
       .from(tasks)
       .where(
         sql`${tasks.assignedAgentId} = ${agent.id} AND ${tasks.status} IN ('assigned', 'in_progress')`
-      )
-      .get();
+      ))[0];
     const activeTasks = activeCount?.count ?? 0;
 
     // Skip fully loaded agents
@@ -108,25 +106,25 @@ export function scoreAgents(
 /**
  * Select the best agent for a task from subordinates of a given supervisor.
  */
-export function selectBestAgent(
+export async function selectBestAgent(
   supervisorId: string,
   taskRequiredCapabilities: string[]
-): AgentScore | null {
-  const descendants = getDescendants(supervisorId);
+): Promise<AgentScore | null> {
+  const descendants = await getDescendants(supervisorId);
   const candidateIds = descendants.map((d) => d.descendantId);
 
   if (candidateIds.length === 0) return null;
 
-  const ranked = scoreAgents(taskRequiredCapabilities, candidateIds);
+  const ranked = await scoreAgents(taskRequiredCapabilities, candidateIds);
   return ranked.length > 0 ? ranked[0] : null;
 }
 
 /**
  * Select the best agent globally.
  */
-export function selectBestAgentGlobal(
+export async function selectBestAgentGlobal(
   taskRequiredCapabilities: string[]
-): AgentScore | null {
-  const ranked = scoreAgents(taskRequiredCapabilities);
+): Promise<AgentScore | null> {
+  const ranked = await scoreAgents(taskRequiredCapabilities);
   return ranked.length > 0 ? ranked[0] : null;
 }

@@ -8,6 +8,20 @@
       "when": 1773995040306,
       "tag": "0000_flowery_ted_forrester",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1774031223725,
+      "tag": "0001_lyrical_wolf_cub",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1774032724680,
+      "tag": "0002_silly_mikhail_rasputin",
+      "breakpoints": true
     }
   ]
 }

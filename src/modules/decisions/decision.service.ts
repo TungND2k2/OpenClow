@@ -41,7 +41,7 @@ export interface RecordDecisionInput {
 /**
  * Record a decision in the audit trail.
  */
-export function recordDecision(input: RecordDecisionInput): DecisionRecord {
+export async function recordDecision(input: RecordDecisionInput): Promise<DecisionRecord> {
   const db = getDb();
   const now = nowMs();
   const id = newId();
@@ -60,7 +60,7 @@ export function recordDecision(input: RecordDecisionInput): DecisionRecord {
     createdAt: now,
   };
 
-  db.insert(decisions).values(record).run();
+  await db.insert(decisions).values(record);
 
   return {
     id,
@@ -78,12 +78,12 @@ export function recordDecision(input: RecordDecisionInput): DecisionRecord {
 /**
  * Query decision audit trail.
  */
-export function queryDecisions(filters?: {
+export async function queryDecisions(filters?: {
   agentId?: string;
   taskId?: string;
   decisionType?: DecisionType;
   limit?: number;
-}): DecisionRecord[] {
+}): Promise<DecisionRecord[]> {
   const db = getDb();
   const conditions: any[] = [];
 
@@ -97,13 +97,12 @@ export function queryDecisions(filters?: {
     conditions.push(eq(decisions.decisionType, filters.decisionType));
   }
 
-  const rows = db
+  const rows = await db
     .select()
     .from(decisions)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(decisions.createdAt))
-    .limit(filters?.limit ?? 50)
-    .all();
+    .limit(filters?.limit ?? 50);
 
   return rows.map((r) => ({
     ...r,

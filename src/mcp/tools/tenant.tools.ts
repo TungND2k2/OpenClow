@@ -15,7 +15,7 @@ export function registerTenantTools(server: McpServer): void {
     const db = getDb();
     const now = nowMs();
     const id = newId();
-    db.insert(tenants).values({
+    await db.insert(tenants).values({
       id,
       name: params.name,
       config: params.config ? JSON.stringify(params.config) : "{}",
@@ -23,7 +23,7 @@ export function registerTenantTools(server: McpServer): void {
       status: "active",
       createdAt: now,
       updatedAt: now,
-    }).run();
+    });
     return { content: [{ type: "text", text: JSON.stringify({ id, name: params.name }, null, 2) }] };
   });
 
@@ -31,7 +31,7 @@ export function registerTenantTools(server: McpServer): void {
     tenant_id: z.string(),
   }, async ({ tenant_id }) => {
     const db = getDb();
-    const row = db.select().from(tenants).where(eq(tenants.id, tenant_id)).get();
+    const row = (await db.select().from(tenants).where(eq(tenants.id, tenant_id)).limit(1))[0];
     if (!row) return { content: [{ type: "text", text: "Not found" }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(row, null, 2) }] };
   });
@@ -47,7 +47,7 @@ export function registerTenantTools(server: McpServer): void {
     if (params.config) updates.config = JSON.stringify(params.config);
     if (params.ai_config) updates.aiConfig = JSON.stringify(params.ai_config);
     if (params.status) updates.status = params.status;
-    db.update(tenants).set(updates).where(eq(tenants.id, params.tenant_id)).run();
+    await db.update(tenants).set(updates).where(eq(tenants.id, params.tenant_id));
     return { content: [{ type: "text", text: "OK" }] };
   });
 }

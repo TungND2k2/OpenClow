@@ -1,0 +1,1 @@
+ALTER TABLE `tenant_users` ADD `metadata` text DEFAULT '{}';

@@ -21,7 +21,7 @@ export function registerOrchestrationTools(server: McpServer): void {
     strategy: z.enum(["sequential", "parallel", "pipeline", "mixed"]).optional(),
   }, async (params) => {
     try {
-      const result = decomposeTask({
+      const result = await decomposeTask({
         taskId: params.task_id,
         agentId: params.agent_id,
         subtasks: params.subtasks.map((s) => ({
@@ -43,7 +43,7 @@ export function registerOrchestrationTools(server: McpServer): void {
     plan_id: z.string(),
   }, async ({ plan_id }) => {
     try {
-      activatePlan(plan_id);
+      await activatePlan(plan_id);
       return { content: [{ type: "text", text: "Plan activated" }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: e.message }], isError: true };
@@ -53,7 +53,7 @@ export function registerOrchestrationTools(server: McpServer): void {
   server.tool("get_plan_status", "View execution plan progress", {
     plan_id: z.string(),
   }, async ({ plan_id }) => {
-    const plan = getPlan(plan_id);
+    const plan = await getPlan(plan_id);
     if (!plan) return { content: [{ type: "text", text: "Plan not found" }], isError: true };
     return { content: [{ type: "text", text: JSON.stringify(plan, null, 2) }] };
   });
@@ -64,8 +64,8 @@ export function registerOrchestrationTools(server: McpServer): void {
     to_agent_id: z.string(),
   }, async ({ task_id, from_agent_id, to_agent_id }) => {
     try {
-      const task = assignTask(task_id, to_agent_id, from_agent_id);
-      recordDecision({
+      const task = await assignTask(task_id, to_agent_id, from_agent_id);
+      await recordDecision({
         agentId: from_agent_id,
         decisionType: "assign",
         taskId: task_id,
@@ -84,14 +84,14 @@ export function registerOrchestrationTools(server: McpServer): void {
   }, async ({ task_id, requesting_agent_id }) => {
     try {
       const { getTask } = await import("../../modules/tasks/task.service.js");
-      const task = getTask(task_id);
+      const task = await getTask(task_id);
       if (!task) return { content: [{ type: "text", text: "Task not found" }], isError: true };
 
-      const best = selectBestAgentGlobal(task.requiredCapabilities);
+      const best = await selectBestAgentGlobal(task.requiredCapabilities);
       if (!best) return { content: [{ type: "text", text: "No suitable agent found" }], isError: true };
 
-      const updated = assignTask(task_id, best.agentId, requesting_agent_id);
-      recordDecision({
+      const updated = await assignTask(task_id, best.agentId, requesting_agent_id);
+      await recordDecision({
         agentId: requesting_agent_id,
         decisionType: "assign",
         taskId: task_id,
@@ -127,7 +127,7 @@ export function registerOrchestrationTools(server: McpServer): void {
       const db = getDb();
       const now = nowMs();
       const id = newId();
-      db.insert(executionPlans).values({
+      await db.insert(executionPlans).values({
         id,
         rootTaskId: params.root_task_id,
         createdByAgentId: params.agent_id,
@@ -136,7 +136,7 @@ export function registerOrchestrationTools(server: McpServer): void {
         status: "draft",
         createdAt: now,
         updatedAt: now,
-      }).run();
+      });
       return { content: [{ type: "text", text: JSON.stringify({ id, status: "draft" }, null, 2) }] };
     } catch (e: any) {
       return { content: [{ type: "text", text: e.message }], isError: true };

@@ -1,43 +1,34 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
   integer,
+  bigint,
+  jsonb,
   index,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { tasks } from "./tasks.js";
 
 // ============================================================
 // messages
 // ============================================================
-export const messages = sqliteTable(
+export const messages = pgTable(
   "messages",
   {
     id: text("id").primaryKey(),
-    type: text("type", {
-      enum: [
-        "command",
-        "report",
-        "request",
-        "broadcast",
-        "escalation",
-        "coordination",
-      ],
-    }).notNull(),
+    type: text("type").notNull(),
     fromAgentId: text("from_agent_id").notNull(), // no FK — allows "system"
     toAgentId: text("to_agent_id"),
     taskId: text("task_id").references(() => tasks.id),
     priority: integer("priority").notNull().default(3),
-    payload: text("payload", { mode: "json" }).notNull(),
-    status: text("status", {
-      enum: ["pending", "delivered", "acknowledged", "expired"],
-    })
+    payload: jsonb("payload").notNull(),
+    status: text("status")
       .notNull()
       .default("pending"),
-    expiresAt: integer("expires_at"),
-    createdAt: integer("created_at").notNull(),
-    deliveredAt: integer("delivered_at"),
-    acknowledgedAt: integer("acknowledged_at"),
+    expiresAt: bigint("expires_at", { mode: "number" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    deliveredAt: bigint("delivered_at", { mode: "number" }),
+    acknowledgedAt: bigint("acknowledged_at", { mode: "number" }),
   },
   (table) => [
     index("idx_messages_to_agent_status").on(table.toAgentId, table.status),
@@ -49,31 +40,18 @@ export const messages = sqliteTable(
 // ============================================================
 // decisions
 // ============================================================
-export const decisions = sqliteTable(
+export const decisions = pgTable(
   "decisions",
   {
     id: text("id").primaryKey(),
     agentId: text("agent_id").notNull(), // no FK — allows "system" as agent
-    decisionType: text("decision_type", {
-      enum: [
-        "decompose",
-        "assign",
-        "reassign",
-        "retry",
-        "escalate",
-        "cancel",
-        "promote",
-        "demote",
-        "spawn",
-        "kill",
-      ],
-    }).notNull(),
+    decisionType: text("decision_type").notNull(),
     taskId: text("task_id").references(() => tasks.id),
     targetAgentId: text("target_agent_id"), // no FK — allows "system"
     reasoning: text("reasoning").notNull(),
-    inputContext: text("input_context", { mode: "json" }),
+    inputContext: jsonb("input_context"),
     outcome: text("outcome"),
-    createdAt: integer("created_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_decisions_agent").on(table.agentId),
@@ -86,7 +64,7 @@ export const decisions = sqliteTable(
 // ============================================================
 // execution_plans
 // ============================================================
-export const executionPlans = sqliteTable(
+export const executionPlans = pgTable(
   "execution_plans",
   {
     id: text("id").primaryKey(),
@@ -96,17 +74,13 @@ export const executionPlans = sqliteTable(
     createdByAgentId: text("created_by_agent_id")
       .notNull()
       .references(() => agents.id),
-    strategy: text("strategy", {
-      enum: ["sequential", "parallel", "pipeline", "mixed"],
-    }).notNull(),
-    planGraph: text("plan_graph", { mode: "json" }).notNull(),
-    status: text("status", {
-      enum: ["draft", "active", "completed", "failed", "cancelled"],
-    })
+    strategy: text("strategy").notNull(),
+    planGraph: jsonb("plan_graph").notNull(),
+    status: text("status")
       .notNull()
       .default("draft"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
   (table) => [
     index("idx_exec_plans_root_task").on(table.rootTaskId),

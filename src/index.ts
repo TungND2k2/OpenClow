@@ -6,6 +6,9 @@ import { createMcpServer } from "./mcp/server.js";
 import { startOrchestrator, stopOrchestrator } from "./modules/orchestration/orchestrator.service.js";
 import { startProxy, stopProxy } from "./proxy/proxy.service.js";
 import { startTelegramBot, stopTelegramBot } from "./bot/telegram.bot.js";
+import { initAgentPool } from "./modules/agents/agent-pool.js";
+import { executeTool } from "./bot/agent-bridge.js";
+import { cleanupDuplicateRules } from "./modules/knowledge/knowledge.service.js";
 
 async function main() {
   // 1. Load config
@@ -13,14 +16,24 @@ async function main() {
   console.error(`[OpenClaw] Starting (env=${config.NODE_ENV})`);
 
   // 2. Run migrations
-  runMigrations();
+  await runMigrations();
   console.error("[OpenClaw] Database ready");
 
-  // 3. Create MCP server
+  // 3. Initialize Agent Pool (Commander + Workers in DB)
+  const pool = initAgentPool({
+    workerCount: 3,
+    toolExecutor: executeTool,
+  });
+  console.error(`[OpenClaw] Agent pool ready`);
+
+  // 3b. Cleanup duplicate knowledge rules
+  await cleanupDuplicateRules();
+
+  // 4. Create MCP server
   const server = createMcpServer();
   console.error("[OpenClaw] MCP server created (66 tools, 3 resources)");
 
-  // 4. Start orchestrator tick loop
+  // 5. Start orchestrator tick loop
   startOrchestrator();
 
   // 5. Start LLM proxy (if configured)
