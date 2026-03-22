@@ -8,7 +8,7 @@
  *   → Inserts row into collection
  */
 
-import { pgTable, text, integer, bigint, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, bigint, jsonb, boolean } from "drizzle-orm/pg-core";
 import { tenants } from "./tenants.js";
 
 // ── Collection Definitions (like table schemas) ──────────────
@@ -21,6 +21,9 @@ export const collections = pgTable("collections", {
   description: text("description"),
   fields: jsonb("fields").notNull(),         // [{name, type, required}]
   createdBy: text("created_by"),             // telegram user id
+  createdByName: text("created_by_name"),
+  updatedByUserId: text("updated_by_user_id"),
+  updatedByName: text("updated_by_name"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
@@ -31,8 +34,11 @@ export const collections = pgTable("collections", {
 export const collectionRows = pgTable("collection_rows", {
   id: text("id").primaryKey(),
   collectionId: text("collection_id").notNull().references(() => collections.id),
-  data: jsonb("data").notNull(),             // {mã_đơn: "DV001", loại_vải: "sọc xanh trắng", ...}
+  data: jsonb("data").notNull(),
   createdBy: text("created_by"),
+  createdByName: text("created_by_name"),
+  updatedByUserId: text("updated_by_user_id"),
+  updatedByName: text("updated_by_name"),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });

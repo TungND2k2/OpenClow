@@ -543,6 +543,69 @@ async function pollLoop(): Promise<void> {
             }
             continue;
           }
+
+          // ── Permission commands: /grant, /deny, /revoke ──
+          const { grantPermission: gp, revokePermission: rvk, resolvePermissionRequest: rpr, getPendingRequests: gpr } = await import("../modules/permissions/permission.service.js");
+
+          // /grant <userId_or_name> <resource> <access>
+          const grantMatch = msg.text.match(/^\/grant\s+(\S+)\s+(\S+)\s+(\S+)$/i);
+          if (grantMatch) {
+            let targetId = grantMatch[1];
+            const resource = grantMatch[2];
+            const access = grantMatch[3].toUpperCase();
+            // Resolve name to ID if needed
+            if (!/^\d+$/.test(targetId)) {
+              const _db = getDb();
+              const allUsers = await _db.select({ channelUserId: tenantUsers.channelUserId, displayName: tenantUsers.displayName })
+                .from(tenantUsers).where(eq(tenantUsers.tenantId, tenantId));
+              const match = allUsers.find((u: any) => u.displayName?.toLowerCase().includes(targetId.toLowerCase()));
+              if (match) targetId = match.channelUserId;
+            }
+            await gp(tenantId, targetId, resource, access);
+            await sendTelegramMessage(msg.chat.id, `✅ Đã cấp quyền <b>${access}</b> trên <b>${resource}</b> cho user <b>${targetId}</b>`);
+            // Notify the user
+            try { await sendTelegramMessage(targetId, `🔓 Bạn đã được cấp quyền <b>${access}</b> trên <b>${resource}</b>`); } catch {}
+            continue;
+          }
+
+          // /deny <requestId>
+          const denyMatch = msg.text.match(/^\/deny\s+(\S+)$/i);
+          if (denyMatch) {
+            await rpr(denyMatch[1], "rejected");
+            await sendTelegramMessage(msg.chat.id, `❌ Đã từ chối yêu cầu quyền.`);
+            continue;
+          }
+
+          // /revoke <userId_or_name> <resource>
+          const revokeMatch = msg.text.match(/^\/revoke\s+(\S+)\s+(\S+)$/i);
+          if (revokeMatch) {
+            let targetId = revokeMatch[1];
+            const resource = revokeMatch[2];
+            if (!/^\d+$/.test(targetId)) {
+              const _db = getDb();
+              const allUsers = await _db.select({ channelUserId: tenantUsers.channelUserId, displayName: tenantUsers.displayName })
+                .from(tenantUsers).where(eq(tenantUsers.tenantId, tenantId));
+              const match = allUsers.find((u: any) => u.displayName?.toLowerCase().includes(targetId.toLowerCase()));
+              if (match) targetId = match.channelUserId;
+            }
+            await rvk(tenantId, targetId, resource);
+            await sendTelegramMessage(msg.chat.id, `🔒 Đã thu hồi quyền trên <b>${resource}</b> của user <b>${targetId}</b>`);
+            continue;
+          }
+
+          // /permissions — xem pending permission requests
+          if (msg.text.trim() === "/permissions") {
+            const reqs = await gpr(userId);
+            if (reqs.length === 0) {
+              await sendTelegramMessage(msg.chat.id, "📋 Không có yêu cầu quyền nào đang chờ.");
+            } else {
+              const list = reqs.map((r: any) =>
+                `• <b>${r.requesterName}</b> xin <b>${r.requestedAccess}</b> trên <b>${r.resource}</b>\n  <code>/grant ${r.requesterId} ${r.resource} ${r.requestedAccess}</code>  |  <code>/deny ${r.id}</code>`
+              ).join("\n\n");
+              await sendTelegramMessage(msg.chat.id, `🔐 <b>Yêu cầu quyền (${reqs.length}):</b>\n\n${list}`);
+            }
+            continue;
+          }
         }
 
         // ── Handle file uploads ──

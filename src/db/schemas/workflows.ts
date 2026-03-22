@@ -30,6 +30,10 @@ export const workflowTemplates = pgTable(
     status: text("status")
       .notNull()
       .default("draft"),
+    createdByUserId: text("created_by_user_id"),
+    createdByName: text("created_by_name"),
+    updatedByUserId: text("updated_by_user_id"),
+    updatedByName: text("updated_by_name"),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
@@ -61,6 +65,10 @@ export const formTemplates = pgTable(
     status: text("status")
       .notNull()
       .default("active"),
+    createdByUserId: text("created_by_user_id"),
+    createdByName: text("created_by_name"),
+    updatedByUserId: text("updated_by_user_id"),
+    updatedByName: text("updated_by_name"),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },
@@ -87,6 +95,10 @@ export const businessRules = pgTable(
     status: text("status")
       .notNull()
       .default("active"),
+    createdByUserId: text("created_by_user_id"),
+    createdByName: text("created_by_name"),
+    updatedByUserId: text("updated_by_user_id"),
+    updatedByName: text("updated_by_name"),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
   },

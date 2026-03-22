@@ -43,7 +43,8 @@ export const tenantUsers = pgTable(
     role: text("role")
       .notNull()
       .default("user"),
-    permissions: jsonb("permissions").default([]), // granular permissions
+    permissions: jsonb("permissions").default([]), // granted permissions: ["form_templates:CRU", "collection_rows:CRUD"]
+    reportsTo: text("reports_to"), // channel_user_id of direct manager (1 person)
     metadata: jsonb("metadata").default({}), // phone, position, etc.
     isActive: boolean("is_active").notNull().default(true),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),

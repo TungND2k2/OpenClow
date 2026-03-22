@@ -29,11 +29,13 @@ import {
 } from "../db/schema.js";
 import { createCollection, listCollections, findCollection, insertRow, listRows, updateRow, deleteRow, searchAllRows } from "../modules/collections/collection.service.js";
 import { startFormSession, updateFormField, getFormState, cancelFormSession } from "../modules/conversations/conversation.service.js";
+import { checkPermission, createPermissionRequest, logAudit } from "../modules/permissions/permission.service.js";
 import { newId } from "../utils/id.js";
 import { nowMs } from "../utils/clock.js";
 
-// Session ID passed per-request for form tools
+// Per-request context for form + permission tools
 let _currentSessionId: string | null = null;
+let _currentUser: { id: string; name: string; role: string } | null = null;
 
 // ── Tool Registry ─────────────────────────────────────────────
 
@@ -418,6 +420,135 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
       return rows;
     }
 
+    // ── DB Query Meta-tool (permission-checked) ───────────────
+
+    case "db_query": {
+      const table = args.table as string;
+      const action = args.action as string; // list, get, create, update, delete
+      const filter = (args.filter as Record<string, unknown>) ?? {};
+      const data = (args.data as Record<string, unknown>) ?? {};
+
+      if (!_currentUser) return { error: "No user context" };
+
+      // Whitelist tables
+      const ALLOWED_TABLES = [
+        "form_templates", "workflow_templates", "business_rules",
+        "collections", "collection_rows", "knowledge_entries",
+      ];
+      if (!ALLOWED_TABLES.includes(table)) {
+        return { error: `Bảng "${table}" không được phép truy cập qua db_query` };
+      }
+
+      // Permission check
+      const perm = await checkPermission(tenantId, _currentUser.id, _currentUser.role, table, action);
+      if (!perm.allowed) {
+        if (perm.needsApproval) {
+          return {
+            denied: true,
+            reason: perm.reason,
+            canRequestAccess: true,
+            approver: perm.needsApproval.approverName,
+            hint: `Dùng tool request_permission(resource="${table}", access="CRUD") để xin quyền từ ${perm.needsApproval.approverName}`,
+          };
+        }
+        return { denied: true, reason: perm.reason };
+      }
+
+      // Execute query
+      const { sql } = await import("drizzle-orm");
+      const tableMap: Record<string, any> = {
+        form_templates: (await import("../db/schema.js")).formTemplates,
+        workflow_templates: (await import("../db/schema.js")).workflowTemplates,
+        business_rules: (await import("../db/schema.js")).businessRules,
+        collections: (await import("../db/schema.js")).collections,
+        collection_rows: (await import("../db/schema.js")).collectionRows,
+        knowledge_entries: (await import("../db/schema.js")).knowledgeEntries,
+      };
+      const dbTable = tableMap[table];
+      if (!dbTable) return { error: `Table ${table} not mapped` };
+
+      let result: unknown;
+
+      if (action === "list" || action === "get") {
+        let q = db.select().from(dbTable);
+        // Apply tenant filter if table has tenantId
+        if ("tenantId" in dbTable) {
+          q = q.where(eq(dbTable.tenantId, tenantId)) as any;
+        }
+        if (action === "get" && filter.id) {
+          q = q.where(eq(dbTable.id, filter.id as string)) as any;
+        }
+        result = await (q as any).limit(action === "get" ? 1 : 50);
+
+      } else if (action === "create") {
+        const id = newId();
+        const values: any = {
+          id, ...data,
+          createdAt: now, updatedAt: now,
+          createdByUserId: _currentUser.id,
+          createdByName: _currentUser.name,
+        };
+        if ("tenantId" in dbTable) values.tenantId = tenantId;
+        await db.insert(dbTable).values(values);
+        result = { id, created: true };
+
+      } else if (action === "update") {
+        if (!filter.id) return { error: "filter.id required for update" };
+        await db.update(dbTable).set({
+          ...data,
+          updatedAt: now,
+          updatedByUserId: _currentUser.id,
+          updatedByName: _currentUser.name,
+        }).where(eq(dbTable.id, filter.id as string));
+        result = { updated: true, id: filter.id };
+
+      } else if (action === "delete") {
+        if (!filter.id) return { error: "filter.id required for delete" };
+        await db.delete(dbTable).where(eq(dbTable.id, filter.id as string));
+        result = { deleted: true, id: filter.id };
+      }
+
+      // Audit log
+      await logAudit({
+        tenantId, userId: _currentUser.id, userName: _currentUser.name,
+        userRole: _currentUser.role, action, resourceTable: table,
+        resourceId: (filter.id as string) ?? undefined,
+        afterData: action === "create" || action === "update" ? data : undefined,
+      });
+
+      return result;
+    }
+
+    case "request_permission": {
+      if (!_currentUser) return { error: "No user context" };
+      const perm = await checkPermission(tenantId, _currentUser.id, _currentUser.role, args.resource as string, "create");
+      if (perm.allowed) return { already_granted: true };
+      if (!perm.needsApproval) return { error: "Không tìm được người duyệt" };
+
+      const reqId = await createPermissionRequest({
+        tenantId,
+        requesterId: _currentUser.id,
+        requesterName: _currentUser.name,
+        approverId: perm.needsApproval.approverId,
+        approverName: perm.needsApproval.approverName,
+        resource: args.resource as string,
+        requestedAccess: (args.access as string) ?? "CRU",
+        reason: args.reason as string,
+      });
+
+      return {
+        requestSent: true,
+        requestId: reqId,
+        approver: perm.needsApproval.approverName,
+        resource: args.resource,
+        access: (args.access as string) ?? "CRU",
+        __notify_user__: {
+          userId: perm.needsApproval.approverId,
+          message: `🔔 <b>${_currentUser.name}</b> xin quyền <b>${(args.access as string) ?? "CRU"}</b> trên <b>${args.resource}</b>\n\nLý do: ${(args.reason as string) ?? "Không nêu"}\n\n<code>/grant ${_currentUser.id} ${args.resource} ${(args.access as string) ?? "CRU"}</code>\n<code>/deny ${reqId}</code>`,
+        },
+      };
+    }
+
     // ── Form State Tools ──────────────────────────────────────
 
     case "start_form": {
@@ -488,8 +619,9 @@ export async function processWithCommander(input: {
   onProgress?: (stage: string) => Promise<void>;
   sessionId?: string;
 }): Promise<CommanderResponse> {
-  // Set session for form tools
+  // Set per-request context for form + permission tools
   _currentSessionId = input.sessionId ?? null;
+  _currentUser = { id: input.userId, name: input.userName, role: input.userRole };
   const _files: CommanderResponse["files"] = [];
   const startTime = Date.now();
 
