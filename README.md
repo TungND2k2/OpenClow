@@ -12,79 +12,63 @@ OpenClaw biến mỗi bot Telegram thành **trợ lý AI thông minh** cho tổ 
 
 ```mermaid
 graph TD
-    U[👤 User — Telegram] -->|nhắn tin| MB{Chọn bot}
-    MB -->|@milo_bot| B1[🤖 Milo<br/>Business Bot]
-    MB -->|@zero_bot| B2[🤖 Zero<br/>Tech Bot]
-    MB -->|@bot_n| BN[🤖 Bot N]
+    SA[👑 Super Admin] -.->|quản lý bots| SYS
 
-    B1 & B2 & BN -->|message| Q[📬 Message Queue<br/>5 concurrent]
-    Q -->|check role| PERM[🔐 Permission<br/>CRUDM]
-    PERM -->|allowed| C[🧠 Commander]
-    PERM -->|denied| AR[📩 Xin quyền]
-    AR -->|bắn 1 người| MGR[👔 Manager]
-    MGR -->|/grant| PERM
+    subgraph SYS[🏗️ OpenClaw — 1 Process, N Bots]
+        B1[🤖 Milo — Kinh doanh]
+        B2[🤖 Zero — Tech]
+        BN[🤖 Bot N — Custom]
+    end
 
-    C -->|phân rã task| S1[📋 Supervisor]
+    U[👤 User — Telegram] -->|nhắn bot| B1 & B2 & BN
+    B1 & B2 & BN -->|message + tenant_id| Q[📬 Message Queue<br/>5 concurrent]
+
+    Q -->|priority sort| P[🔐 Permission Check<br/>CRUDM]
+    P -->|allowed| C[🧠 Commander]
+    P -->|denied| AR[📩 Xin quyền]
+    AR -->|bắn 1 người| MGR[👔 Manager/Admin]
+    MGR -->|/grant| P
+
+    C -->|phân rã task| S1[📋 Supervisor 1]
+    C -->|phân rã task| S2[📋 Supervisor 2]
+
     S1 -->|giao việc| W1[⚙️ Worker 1]
     S1 -->|giao việc| W2[⚙️ Worker 2]
+    S2 -->|giao việc| W3[⚙️ Worker 3]
 
-    W1 & W2 -->|gọi tools| T[🔧 Tool Registry<br/>30 tools]
+    W1 & W2 & W3 -->|gọi tools| T[🔧 Tool Registry<br/>30 tools]
 
-    T --> DB[(🗄️ PostgreSQL)]
+    T --> DB[(🗄️ PostgreSQL<br/>tenant isolation)]
     T --> S3[📦 S3 Storage]
-    T --> KB[📚 Knowledge Base]
+    T --> KB[📚 Knowledge Base<br/>self-learning]
     T --> AL[📝 Audit Log]
 
     KB -.->|kiến thức đã học| C
 
-    SA[👑 Super Admin] -.->|quản lý tất cả bots| B1 & B2 & BN
-
-    style C fill:#4A90D9,color:#fff
-    style PERM fill:#E74C3C,color:#fff
-    style S1 fill:#7B68EE,color:#fff
-    style W1 fill:#2ECC71,color:#fff
-    style W2 fill:#2ECC71,color:#fff
-    style AL fill:#F39C12,color:#fff
     style SA fill:#FFD700,color:#000
     style B1 fill:#4A90D9,color:#fff
     style B2 fill:#2ECC71,color:#fff
     style BN fill:#9B59B6,color:#fff
-```
-
-### Multi-Bot & Personal Bot
-
-```mermaid
-graph LR
-    subgraph "1 Process — N Bots"
-        B1[🤖 Milo<br/>persona: kinh doanh<br/>tenant: A]
-        B2[🤖 Zero<br/>persona: tech<br/>tenant: B]
-        B3[🤖 Bot N<br/>persona: custom<br/>tenant: N]
-    end
-
-    subgraph "Mỗi bot có riêng"
-        D1[👥 Users & Roles]
-        D2[📚 Knowledge]
-        D3[📋 Collections]
-        D4[⚙️ Workflows]
-        D5[🧠 Persona & Config]
-    end
-
-    B1 & B2 & B3 --> DB[(🗄️ PostgreSQL<br/>filter by tenant_id)]
-
-    style B1 fill:#4A90D9,color:#fff
-    style B2 fill:#2ECC71,color:#fff
-    style B3 fill:#9B59B6,color:#fff
+    style C fill:#4A90D9,color:#fff
+    style P fill:#E74C3C,color:#fff
+    style S1 fill:#7B68EE,color:#fff
+    style S2 fill:#7B68EE,color:#fff
+    style W1 fill:#2ECC71,color:#fff
+    style W2 fill:#2ECC71,color:#fff
+    style W3 fill:#2ECC71,color:#fff
+    style AL fill:#F39C12,color:#fff
+    style KB fill:#F39C12,color:#fff
 ```
 
 ```
+Mỗi bot có riêng — data hoàn toàn tách biệt:
+  🤖 Milo: persona kinh doanh, knowledge sale, đơn hàng, quy trình
+  🤖 Zero: persona tech, knowledge DevOps, code snippets
+  → Cùng 1 user nhắn 2 bot → 2 thế giới riêng biệt
+
 Persona lưu DB — bot tự nhớ vai trò:
   User: "bạn là bot tech" → update_ai_config → lưu DB → restart vẫn nhớ
-  User: "đổi tên thành TechBot" → update_ai_config → lưu DB
   User: "nhớ giùm stack: Node.js + Docker" → save_knowledge → lưu DB
-
-Data isolation:
-  Cùng 1 user nhắn Milo → thấy data Milo
-  Cùng user nhắn Zero → thấy data Zero → hoàn toàn tách biệt
 ```
 
 ---
