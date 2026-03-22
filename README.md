@@ -2,33 +2,33 @@
 
 **Multi-Agent Orchestration System — Semi-Autonomous AI Workforce**
 
-Hệ thống AI agent phân cấp, tự học, quản lý qua chat — không cần code.
+Hệ thống quản lý multi-bot AI, tự học, phân quyền dynamic, quản lý qua chat — không cần code.
 
 ---
 
 ## OpenClaw là gì?
 
-Thay vì 1 chatbot → OpenClaw là **đội ngũ AI** làm việc như công ty thật.
-
-Admin/Manager dạy AI qua chat → AI tự học → tự xử lý lần sau.
+OpenClaw biến mỗi bot Telegram thành **trợ lý AI thông minh** cho tổ chức. Mỗi bot có persona riêng, data riêng, users riêng — chạy trên cùng 1 hạ tầng.
 
 ```mermaid
 graph TD
-    U[👤 User — Telegram] -->|nhắn tin| Q[📬 Message Queue]
-    Q -->|priority sort| P[🔐 Permission Check]
-    P -->|allowed| C[🧠 Commander]
-    P -->|denied| AR[📩 Approval Request]
-    AR -->|gửi 1 người| MGR[👔 Manager/Admin]
-    MGR -->|/grant| P
+    U[👤 User — Telegram] -->|nhắn tin| MB{Chọn bot}
+    MB -->|@milo_bot| B1[🤖 Milo<br/>Business Bot]
+    MB -->|@zero_bot| B2[🤖 Zero<br/>Tech Bot]
+    MB -->|@bot_n| BN[🤖 Bot N]
 
-    C -->|phân rã task| S1[📋 Supervisor 1]
-    C -->|phân rã task| S2[📋 Supervisor 2]
+    B1 & B2 & BN -->|message| Q[📬 Message Queue<br/>5 concurrent]
+    Q -->|check role| PERM[🔐 Permission<br/>CRUDM]
+    PERM -->|allowed| C[🧠 Commander]
+    PERM -->|denied| AR[📩 Xin quyền]
+    AR -->|bắn 1 người| MGR[👔 Manager]
+    MGR -->|/grant| PERM
 
+    C -->|phân rã task| S1[📋 Supervisor]
     S1 -->|giao việc| W1[⚙️ Worker 1]
     S1 -->|giao việc| W2[⚙️ Worker 2]
-    S2 -->|giao việc| W3[⚙️ Worker 3]
 
-    W1 & W2 & W3 -->|gọi tools| T[🔧 Tool Registry]
+    W1 & W2 -->|gọi tools| T[🔧 Tool Registry<br/>30 tools]
 
     T --> DB[(🗄️ PostgreSQL)]
     T --> S3[📦 S3 Storage]
@@ -37,79 +37,151 @@ graph TD
 
     KB -.->|kiến thức đã học| C
 
+    SA[👑 Super Admin] -.->|quản lý tất cả bots| B1 & B2 & BN
+
     style C fill:#4A90D9,color:#fff
-    style P fill:#E74C3C,color:#fff
+    style PERM fill:#E74C3C,color:#fff
     style S1 fill:#7B68EE,color:#fff
-    style S2 fill:#7B68EE,color:#fff
     style W1 fill:#2ECC71,color:#fff
     style W2 fill:#2ECC71,color:#fff
-    style W3 fill:#2ECC71,color:#fff
     style AL fill:#F39C12,color:#fff
+    style SA fill:#FFD700,color:#000
+    style B1 fill:#4A90D9,color:#fff
+    style B2 fill:#2ECC71,color:#fff
+    style BN fill:#9B59B6,color:#fff
+```
+
+### Multi-Bot & Personal Bot
+
+```mermaid
+graph LR
+    subgraph "1 Process — N Bots"
+        B1[🤖 Milo<br/>persona: kinh doanh<br/>tenant: A]
+        B2[🤖 Zero<br/>persona: tech<br/>tenant: B]
+        B3[🤖 Bot N<br/>persona: custom<br/>tenant: N]
+    end
+
+    subgraph "Mỗi bot có riêng"
+        D1[👥 Users & Roles]
+        D2[📚 Knowledge]
+        D3[📋 Collections]
+        D4[⚙️ Workflows]
+        D5[🧠 Persona & Config]
+    end
+
+    B1 & B2 & B3 --> DB[(🗄️ PostgreSQL<br/>filter by tenant_id)]
+
+    style B1 fill:#4A90D9,color:#fff
+    style B2 fill:#2ECC71,color:#fff
+    style B3 fill:#9B59B6,color:#fff
+```
+
+```
+Persona lưu DB — bot tự nhớ vai trò:
+  User: "bạn là bot tech" → update_ai_config → lưu DB → restart vẫn nhớ
+  User: "đổi tên thành TechBot" → update_ai_config → lưu DB
+  User: "nhớ giùm stack: Node.js + Docker" → save_knowledge → lưu DB
+
+Data isolation:
+  Cùng 1 user nhắn Milo → thấy data Milo
+  Cùng user nhắn Zero → thấy data Zero → hoàn toàn tách biệt
 ```
 
 ---
 
 ## Tính năng chính
 
-### 1. Agent phân cấp — tạo qua chat, không code
+### 1. Multi-Bot — nhiều bot, 1 hệ thống
 
 ```
-Admin: "tạo agent Sales Analyst chuyên phân tích file"
-→ AI tạo template trong DB
-→ "spawn 3 con" → 3 workers sẵn sàng
-→ Tắt: "kill agent Worker-2"
+1 process chạy N bots cùng lúc
+Mỗi bot = 1 tenant riêng: data, users, knowledge tách biệt
+Super Admin quản lý tất cả bots
+Thêm bot mới → tạo tenant + token → chạy ngay, không restart
+
+Ví dụ:
+  @milo_bot → bot quản lý kinh doanh (đơn hàng, quy trình, nhân sự)
+  @zero_bot → bot hỗ trợ tech (code, server, DevOps)
+  @sales_bot → bot riêng cho team sales
 ```
 
-### 2. Tự học từ hội thoại (Self-Learning)
+### 2. Bot tự nhớ persona — config lưu DB
 
 ```
-Lần 1: Manager dạy "task loại A thuộc phòng X, task loại B thuộc phòng Y"
-→ Lưu vào Knowledge Base + Business Rules
+User: "bạn là bot chuyên về tech"
+→ Bot gọi update_ai_config → lưu persona vào DB
+→ Restart vẫn nhớ
 
-Lần 2: User tạo task loại A
-→ AI tự phân loại → Phòng X → phân quyền xem
+User: "đổi tên thành TechBot"
+→ Bot gọi update_ai_config({bot_name: "TechBot"}) → lưu DB
+
+User: "nhớ giùm tôi đang dùng Node.js + Docker"
+→ Bot gọi save_knowledge → lưu knowledge DB
+```
+
+### 3. Tự học từ hội thoại (Self-Learning)
+
+```
+Lần 1: Manager dạy quy tắc phân loại, quy trình
+→ Bot lưu vào Knowledge Base + Business Rules
+
+Lần 2: User tạo task tương tự
+→ Bot tự áp dụng quy tắc đã học
 → Không cần ai dạy lại
+
+Knowledge tự dedup — cùng intent chỉ giữ 1 rule, tăng use_count
 ```
 
-### 3. Dynamic Data — tạo bảng qua chat
+### 4. Quản lý dữ liệu qua chat
 
 ```
-Admin: "tạo bảng Đơn hàng gồm mã đơn, sản phẩm, số lượng, deadline"
-→ AI tạo collection trong DB
-→ "thêm đơn DH-001 sản phẩm A, 100 cái, deadline tuần sau"
-→ Lưu vào PostgreSQL thật, không bịa
+"Tạo bảng theo dõi đơn hàng"
+→ Tạo collection trong DB
+
+"Nhập đơn mới: KH A, 20 sản phẩm, deadline tuần sau"
+→ Lưu vào DB thật
+
+"Danh sách đơn chưa hoàn thành?"
+→ Query DB, trả kết quả chính xác — không bịa
+
+Smart search: filter DB trước khi gửi LLM
+Pagination: > 20 rows → trả summary
 ```
 
-### 4. File & Vision
+### 5. Multi-step Form — không mất data
 
 ```
-User gửi file PDF/DOCX/Excel → upload S3 → extract text
-User gửi ảnh → AI phân tích nội dung (vision)
-User: "đọc tài liệu hướng dẫn" → AI tự tìm file → đọc → tóm tắt
+Form 19 bước → mỗi field lưu DB ngay
+→ Bước 10, hỏi "bước 3 nhập gì?" → trả lời chính xác
+→ Tắt app, quay lại → tiếp tục đúng chỗ
+→ 3 người nhập cùng lúc → mỗi người 1 phiên riêng
+
+Conversation auto-summary khi history dài
+→ Prompt nhẹ (~500 tokens thay vì 3000+)
 ```
 
-### 5. Phân quyền Dynamic + Approval Flow
+### 6. Phân quyền Dynamic (CRUDM)
 
 ```
-Admin → full quyền, cấp/thu hồi quyền cho mọi người
-Manager → quyền mặc định CRU, xin thêm từ Admin
-Staff/Sales → quyền mặc định CR, xin thêm từ Manager trực tiếp
+C = Create, R = Read, U = Update, D = Delete, M = Manage (cấp quyền)
+
+Admin → toàn quyền
+Manager → quyền mặc định + cấp quyền cho staff (nếu có M)
+Staff/Sales → quyền mặc định, xin thêm từ manager
 
 Khi không đủ quyền:
-  → Hệ thống hỏi "Gửi yêu cầu xin quyền cho [Manager X]?"
-  → Bắn đúng 1 người (reports_to) — không loạn
+  → Bot hỏi "Gửi yêu cầu cho [Manager X]?"
+  → Bắn đúng 1 người (reports_to)
   → Manager: /grant user resource CRUD → cấp vĩnh viễn
-
-Chưa đăng ký → /register → admin duyệt
+  → Mọi thao tác lưu audit log
 ```
 
-### 6. Multi-step Form Persistent
+### 7. File & Vision
 
 ```
-Form 19 bước → user nhập từng field → data lưu DB mỗi bước
-→ Tắt app, quay lại → data vẫn còn
-→ Hỏi "bước 1 nhập gì?" → trả lời chính xác
-→ Conversation auto-summary khi history dài
+Upload PDF/DOCX/Excel → extract text + lưu S3
+Upload ảnh → AI phân tích nội dung (vision)
+"Đọc cẩm nang sale" → AI tự tìm file → đọc → trả lời từ nội dung thật
 ```
 
 ---
@@ -119,30 +191,32 @@ Form 19 bước → user nhập từng field → data lưu DB mỗi bước
 ```mermaid
 graph LR
     subgraph Input
-        TG[📱 Telegram Bot]
-        MCP[🔌 MCP Server<br/>66 tools]
+        TG[📱 Telegram Bots<br/>N bots parallel]
+        MCP[🔌 MCP Server<br/>30 tools]
     end
 
     subgraph Core
         Q[📬 Queue<br/>5 concurrent]
+        PERM[🔐 Permission<br/>CRUDM check]
         P[⚡ Pipeline<br/>Knowledge → Think → Tools → Learn]
         O[🔄 Orchestrator<br/>5s tick]
     end
 
     subgraph Data
-        DB[(🗄️ PostgreSQL<br/>24 tables)]
+        DB[(🗄️ PostgreSQL<br/>26 tables)]
         S3[📦 S3 Storage]
         KB[📚 Knowledge<br/>Self-Learning]
+        AL[📝 Audit Log]
     end
 
-    subgraph LLM Pool
-        L1[🧠 Strong LLM<br/>Commander brain]
-        L2[⚡ Fast LLM<br/>Worker brain]
+    subgraph LLM
+        L1[🧠 Strong LLM<br/>Commander]
+        L2[⚡ Fast LLM<br/>Workers]
     end
 
-    TG --> Q --> P
+    TG --> Q --> PERM --> P
     MCP --> P
-    P --> DB & S3 & KB
+    P --> DB & S3 & KB & AL
     P --> L1 & L2
     O --> P
     KB -.->|đã học| P
@@ -150,9 +224,31 @@ graph LR
     style L1 fill:#4A90D9,color:#fff
     style L2 fill:#2ECC71,color:#fff
     style KB fill:#F39C12,color:#fff
+    style PERM fill:#E74C3C,color:#fff
 ```
 
-> **LLM = não, Agent = nhân viên.** Cùng não, khác job description (system prompt + tools + quyền hạn).
+---
+
+## Phân cấp hệ thống
+
+```
+Super Admin (owner hệ thống)
+  │
+  ├── Bot Milo (Tenant A — kinh doanh)
+  │   ├── Admin A
+  │   ├── Manager A1 (reports_to: Admin A)
+  │   └── Staff/Sales (reports_to: Manager A1)
+  │
+  ├── Bot Zero (Tenant B — tech)
+  │   ├── Admin B
+  │   └── ...
+  │
+  └── Bot N (Tenant N)
+      └── ...
+
+Data hoàn toàn tách biệt giữa các bot
+Cùng 1 user có thể ở nhiều bot với role khác nhau
+```
 
 ---
 
@@ -160,21 +256,21 @@ graph LR
 
 ```
 src/
-  ├── bot/                  Telegram bot + message queue + agent bridge
+  ├── bot/                  Multi-bot Telegram + queue + agent bridge
   ├── db/                   PostgreSQL schemas (Drizzle ORM)
-  ├── mcp/                  MCP server + 66 tools
+  ├── mcp/                  MCP server (shared tool registry)
   ├── proxy/                LLM proxy routing
   └── modules/
        ├── agents/          Agent templates, pool, runner
-       ├── collections/     Dynamic tables (CRUD)
-       ├── knowledge/       Self-learning knowledge base
-       ├── tasks/           Task lifecycle
-       ├── orchestration/   Task decomposition, DAG, auto-assign
-       ├── workflows/       Workflow + form + rules engine
-       ├── storage/         S3 + PDF/DOCX/XLSX extraction
-       ├── permissions/      Dynamic RBAC + approval flow + audit
+       ├── collections/     Dynamic tables (CRUD) + owner tracking
        ├── conversations/   Session state + form state + summary
-       ├── decisions/       Decision audit trail
+       ├── knowledge/       Self-learning (intent-based merge)
+       ├── permissions/     Dynamic RBAC + approval flow + audit
+       ├── tasks/           Task lifecycle
+       ├── orchestration/   Dispatch, DAG, auto-assign
+       ├── workflows/       Workflow + form + rules engine
+       ├── storage/         S3 + PDF/DOCX/XLSX + vision
+       ├── tenants/         Multi-tenant management
        ├── monitoring/      Health check, budget
        └── ...
 ```
@@ -190,61 +286,10 @@ src/
 | `/approve <id>` | admin | Duyệt đăng ký |
 | `/reject <id>` | admin | Từ chối đăng ký |
 | `/pending` | admin | Xem đăng ký chờ duyệt |
-| `/grant <user> <resource> <access>` | admin/manager (cần M) | Cấp quyền (CRUDM/CRUD/CRU/CR/R) |
+| `/grant <user> <resource> <access>` | admin/manager (cần M) | Cấp quyền (CRUDM) |
 | `/deny <requestId>` | admin/manager | Từ chối yêu cầu quyền |
 | `/revoke <user> <resource>` | admin/manager | Thu hồi quyền |
 | `/permissions` | admin/manager | Xem yêu cầu quyền đang chờ |
-
----
-
-## Testing Guide
-
-### 1. Form State — multi-step form
-
-```
-User: "nhập đơn hàng"
-→ Bot gọi start_form → hỏi field đầu tiên
-→ Nhập 3-4 field liên tiếp
-→ Hỏi "bước 1 tôi nhập gì?" → bot trả lời đúng từ DB
-→ "sửa bước 2 thành ABC" → bot update DB
-→ Tắt app, quay lại "tiếp tục nhập đơn" → resume đúng chỗ
-```
-
-### 2. Permission — quyền mặc định
-
-```
-Manager nhắn: "tạo form mới tên Test" → OK (có quyền C trên form_templates)
-Sales nhắn: "xoá form Test" → Từ chối (sales không có D trên form_templates)
-Admin nhắn: bất kỳ → OK (full quyền)
-```
-
-### 3. Approval Flow — xin quyền
-
-```
-Sales nhắn: "tạo workflow mới"
-→ Bot: "Bạn chưa có quyền. Gửi yêu cầu cho [Manager]?"
-→ Sales: "ok"
-→ Manager nhận: "🔔 [Sales] xin quyền CRU trên workflow_templates"
-→ Manager: /grant <sales_id> workflow_templates CRU
-→ Sales nhận: "🔓 Bạn đã được cấp quyền CRU trên workflow_templates"
-→ Sales tự tạo workflow từ giờ — không cần hỏi lại
-```
-
-### 4. Grant/Revoke commands
-
-```
-/grant kristina knowledge_entries CRUD     → cấp quyền
-/revoke kristina knowledge_entries          → thu hồi
-/permissions                                → xem yêu cầu đang chờ
-```
-
-### 5. Conversation Summary
-
-```
-Chat > 15 messages → hệ thống tự tóm tắt
-→ Prompt nhẹ hơn, token ít hơn
-→ Bot vẫn nhớ context quan trọng
-```
 
 ---
 
@@ -254,58 +299,52 @@ Chat > 15 messages → hệ thống tự tóm tắt
 
 - **Node.js** >= 22
 - **PostgreSQL** >= 16
-- **LLM CLI** (cho Commander brain — optional)
 - **S3 storage** (cho file upload)
+- **LLM API** (OpenAI-compatible hoặc CLI)
 
 ### Quick Start
 
 ```bash
-# 1. Clone
-git clone https://github.com/TungND2k2/OpenClow.git
-cd OpenClow && npm install
-
-# 2. Config
-cp .env.example .env
-# Sửa .env: DATABASE_URL, TELEGRAM_BOT_TOKEN, S3 keys
-
-# 3. Setup
-npx tsx scripts/setup-demo.ts <YOUR_TELEGRAM_ID>
-# Copy TELEGRAM_DEFAULT_TENANT_ID vào .env
-
-# 4. Run
+git clone https://github.com/TungND2k2/OpenClaw.git
+cd OpenClaw && npm install
+cp .env.example .env    # sửa config
+npx tsx scripts/setup-demo.ts <TELEGRAM_ID>
 npx tsx src/index.ts
 ```
 
 ### Production (Ubuntu)
 
 ```bash
-# Cài dependencies
+# Dependencies
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt install -y nodejs postgresql
-npm install -g pm2 @anthropic-ai/claude-code
+apt install -y nodejs postgresql mupdf-tools
+npm install -g pm2
 
-# PostgreSQL setup
-sudo -u postgres createuser openclaw -P    # password: openclaw123
+# PostgreSQL
+sudo -u postgres createuser openclaw -P
 sudo -u postgres createdb openclaw -O openclaw
 
-# Clone + deploy
-cd /opt && git clone https://github.com/TungND2k2/OpenClow.git
-cd OpenClow && npm install
-cp .env.example .env && nano .env
-
-# Setup + start
+# Deploy
+cd /opt && git clone https://github.com/TungND2k2/OpenClaw.git
+cd OpenClaw && npm install && cp .env.example .env
 npx tsx scripts/setup-demo.ts <TELEGRAM_ID>
 pm2 start "npx tsx src/index.ts" --name openclaw
 pm2 save && pm2 startup
+```
 
-# LLM CLI login (cho Commander brain)
-# Cấu hình theo provider bạn dùng
+### Thêm bot mới (multi-bot)
+
+```bash
+# 1. Tạo bot trên @BotFather → lấy token
+# 2. Insert tenant + token vào DB
+# 3. Restart: pm2 restart openclaw
+# → Bot mới tự start polling
 ```
 
 ### Update
 
 ```bash
-cd /opt/OpenClow && git pull && npm install && pm2 restart openclaw
+cd /opt/OpenClaw && git pull && npm install && pm2 restart openclaw
 ```
 
 ---
@@ -313,24 +352,21 @@ cd /opt/OpenClow && git pull && npm install && pm2 restart openclaw
 ## .env
 
 ```env
-# Database (PostgreSQL)
 DATABASE_URL=postgresql://openclaw:openclaw123@localhost:5432/openclaw
-
-# Server
 NODE_ENV=production
 
-# Telegram
+# Telegram (fallback — bot tokens nên lưu trong DB)
 TELEGRAM_BOT_TOKEN=your-bot-token
 TELEGRAM_DEFAULT_TENANT_ID=   # từ setup-demo
 
-# S3 Storage
+# S3
 S3_ENDPOINT=https://s3.example.com
 S3_REGION=us-east-1
 S3_BUCKET=your-bucket
 S3_ACCESS_KEY=
 S3_SECRET_KEY=
 
-# LLM (optional — Workers dùng fast API)
+# LLM
 WORKER_API_BASE=https://api.openai.com/v1
 WORKER_API_KEY=
 WORKER_MODEL=gpt-4o-mini
@@ -344,9 +380,9 @@ WORKER_MODEL=gpt-4o-mini
 |-------|-----------|
 | Runtime | Node.js 22 + TypeScript |
 | Database | PostgreSQL 16 + Drizzle ORM |
-| MCP | @modelcontextprotocol/sdk |
-| AI | LLM API (OpenAI-compatible) |
-| Bot | Telegram Bot API (long-polling) |
+| Protocol | MCP (Model Context Protocol) |
+| AI | LLM API (OpenAI-compatible) + CLI |
+| Bot | Telegram Bot API (multi-bot long-polling) |
 | Storage | S3-compatible |
 | Process | PM2 |
 
@@ -356,51 +392,58 @@ WORKER_MODEL=gpt-4o-mini
 
 | Doc | Nội dung |
 |-----|----------|
-| [FORM-STATE.md](docs/FORM-STATE.md) | Multi-step form persistent — summary + form state |
-| [ROADMAP-LEARNED-ROUTING.md](docs/ROADMAP-LEARNED-ROUTING.md) | Tự học engine routing CLI/fast-api (PENDING) |
+| [FORM-STATE.md](docs/FORM-STATE.md) | Multi-step form + conversation summary |
+| [DB-ACCESS-CONTROL.md](docs/DB-ACCESS-CONTROL.md) | Dynamic permission + approval flow |
+| [MULTI-BOT.md](docs/MULTI-BOT.md) | Multi-bot management + super admin |
+| [BOT-HIERARCHY.md](docs/BOT-HIERARCHY.md) | Bot phân cấp theo tổ chức (planned) |
+| [ROADMAP-LEARNED-ROUTING.md](docs/ROADMAP-LEARNED-ROUTING.md) | Tự học engine routing (planned) |
 
 ---
 
 ## Changelog
 
+### v0.6.0 — Multi-Bot + Dynamic Persona
+- **Multi-bot**: N bots chạy trong 1 process, mỗi bot 1 tenant riêng
+- **Bot token lưu DB**: không cần .env cho mỗi bot
+- **Super Admin**: quản lý toàn bộ hệ thống, tạo/stop bots
+- **Dynamic persona**: user đổi vai trò bot qua chat → lưu DB → restart vẫn nhớ
+- **Dynamic bot name**: tên bot lấy từ DB, không hardcode
+- **MCP cleanup**: xoá 17 files duplicate, dùng shared tool registry (30 tools)
+- **Runtime bot management**: `addBot()`, `removeBot()`, `listBots()`
+
 ### v0.5.0 — Dynamic Permissions + Audit Trail
-- **`db_query` meta-tool**: 1 tool generic thay 20+ tools riêng — AI tự CRUD bất kỳ resource
-- **Permission check**: mọi thao tác qua `db_query` đều check quyền theo role
-- **Grant flow**: `/grant user resource CRUD` — cấp quyền vĩnh viễn, `/revoke` thu hồi
-- **Approval request**: user không đủ quyền → hệ thống gửi yêu cầu cho `reports_to` (1 người)
-- **Owner tracking**: `created_by_user_id`, `created_by_name`, `updated_by_*` trên mọi record
-- **Audit trail**: mọi thao tác CRUD lưu log (ai, làm gì, khi nào)
-- **Commands mới**: `/grant`, `/deny`, `/revoke`, `/permissions`
+- **`db_query` meta-tool**: generic CRUD với permission check
+- **CRUDM permissions**: C/R/U/D + M (Manage — cấp quyền cho người khác)
+- **Grant flow**: `/grant`, `/deny`, `/revoke` commands
+- **Approval request**: bắn đúng 1 người (reports_to)
+- **Owner tracking**: `created_by`, `updated_by` trên mọi record
+- **Audit trail**: mọi thao tác lưu log
 
 ### v0.4.0 — Form State + Conversation Summary
-- **Conversation Summary**: auto tóm tắt mỗi 10 messages → giữ summary + 5 recent → tiết kiệm tokens
-- **Form State**: multi-step form lưu per-user session trong DB → không mất data khi history dài
-- **Tools mới**: `start_form`, `update_form_field`, `get_form_state`, `cancel_form`
-- **Auto-save**: form complete → `add_row` vào collection (TODO)
+- **Conversation Summary**: auto tóm tắt mỗi 10 messages
+- **Form State**: multi-step form lưu per-user session trong DB
+- **Tools**: `start_form`, `update_form_field`, `get_form_state`, `cancel_form`
 
 ### v0.3.0 — PostgreSQL + Smart Search
-- Chuyển SQLite → **PostgreSQL** (data persistent, remote access)
-- **Smart search**: `search_all(keyword)` filter DB trước khi gửi LLM
-- **Pagination**: > 20 rows → trả summary + hint xem tiếp
-- **Knowledge dedup**: merge rules cùng intent, tăng `usage_count`
+- SQLite → **PostgreSQL** (persistent, remote access)
+- **Smart search**: `search_all(keyword)` filter trước khi gửi LLM
+- **Pagination**: > 20 rows → summary
+- **Knowledge dedup**: intent-based merge
 
 ### v0.2.0 — Agent System + Self-Learning
-- **Agent Templates**: tạo agent qua chat, không code
-- **AgentPool**: Commander + Workers spawn từ templates
-- **Self-learning**: 34 rules tự học từ hội thoại (intent-based merge)
-- **Business Rules**: phân loại task theo bộ phận (Sản xuất, Marketing, Sales, Kế toán)
-- **Dynamic Collections**: admin tạo bảng qua chat, CRUD data thật trong DB
-- **Image Vision**: phân tích ảnh qua LLM CLI + Read tool
-- **File parsing**: PDF (mutool fallback), DOCX (mammoth), XLSX
-- **S3 Storage**: upload files từ Telegram → S3
+- Agent Templates — tạo agent qua chat
+- Self-learning — intent-based knowledge rules
+- Dynamic Collections — tạo bảng qua chat
+- Image Vision — phân tích ảnh
+- File parsing — PDF, DOCX, XLSX
+- S3 Storage
 
 ### v0.1.0 — Foundation
 - Telegram bot + message queue (5 concurrent)
-- MCP server (66 tools)
-- Orchestrator (health check, task dispatch, DAG rollup)
-- Role-based access (admin → manager → sales/staff/user)
-- User registration (`/register` → admin approve)
-- Progress messages (edit cùng 1 message)
+- MCP server
+- Orchestrator (health check, dispatch, DAG)
+- Role-based access + registration flow
+- Progress messages
 
 ---
 
