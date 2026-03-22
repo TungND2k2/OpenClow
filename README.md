@@ -15,7 +15,11 @@ Admin/Manager dạy AI qua chat → AI tự học → tự xử lý lần sau.
 ```mermaid
 graph TD
     U[👤 User — Telegram] -->|nhắn tin| Q[📬 Message Queue]
-    Q -->|priority sort| C[🧠 Commander]
+    Q -->|priority sort| P[🔐 Permission Check]
+    P -->|allowed| C[🧠 Commander]
+    P -->|denied| AR[📩 Approval Request]
+    AR -->|gửi 1 người| MGR[👔 Manager/Admin]
+    MGR -->|/grant| P
 
     C -->|phân rã task| S1[📋 Supervisor 1]
     C -->|phân rã task| S2[📋 Supervisor 2]
@@ -29,15 +33,18 @@ graph TD
     T --> DB[(🗄️ PostgreSQL)]
     T --> S3[📦 S3 Storage]
     T --> KB[📚 Knowledge Base]
+    T --> AL[📝 Audit Log]
 
     KB -.->|kiến thức đã học| C
 
     style C fill:#4A90D9,color:#fff
+    style P fill:#E74C3C,color:#fff
     style S1 fill:#7B68EE,color:#fff
     style S2 fill:#7B68EE,color:#fff
     style W1 fill:#2ECC71,color:#fff
     style W2 fill:#2ECC71,color:#fff
     style W3 fill:#2ECC71,color:#fff
+    style AL fill:#F39C12,color:#fff
 ```
 
 ---
@@ -81,13 +88,28 @@ User gửi ảnh → AI phân tích nội dung (vision)
 User: "đọc tài liệu hướng dẫn" → AI tự tìm file → đọc → tóm tắt
 ```
 
-### 5. Phân quyền theo cấp bậc
+### 5. Phân quyền Dynamic + Approval Flow
 
 ```
-Admin → cấp Manager, toàn quyền
-Manager → cấp User/Sales/Staff, quản lý quy trình
-User/Sales → sử dụng quy trình, hỏi đáp
+Admin → full quyền, cấp/thu hồi quyền cho mọi người
+Manager → quyền mặc định CRU, xin thêm từ Admin
+Staff/Sales → quyền mặc định CR, xin thêm từ Manager trực tiếp
+
+Khi không đủ quyền:
+  → Hệ thống hỏi "Gửi yêu cầu xin quyền cho [Manager X]?"
+  → Bắn đúng 1 người (reports_to) — không loạn
+  → Manager: /grant user resource CRUD → cấp vĩnh viễn
+
 Chưa đăng ký → /register → admin duyệt
+```
+
+### 6. Multi-step Form Persistent
+
+```
+Form 19 bước → user nhập từng field → data lưu DB mỗi bước
+→ Tắt app, quay lại → data vẫn còn
+→ Hỏi "bước 1 nhập gì?" → trả lời chính xác
+→ Conversation auto-summary khi history dài
 ```
 
 ---
@@ -154,6 +176,22 @@ src/
        ├── monitoring/      Health check, budget
        └── ...
 ```
+
+---
+
+## Bot Commands
+
+| Command | Role | Mô tả |
+|---------|------|--------|
+| `/start` | all | Xem hướng dẫn |
+| `/register` | guest | Đăng ký sử dụng |
+| `/approve <id>` | admin | Duyệt đăng ký |
+| `/reject <id>` | admin | Từ chối đăng ký |
+| `/pending` | admin | Xem đăng ký chờ duyệt |
+| `/grant <user> <resource> <access>` | admin/manager | Cấp quyền (CRUD/CRU/CR/R) |
+| `/deny <requestId>` | admin/manager | Từ chối yêu cầu quyền |
+| `/revoke <user> <resource>` | admin/manager | Thu hồi quyền |
+| `/permissions` | admin/manager | Xem yêu cầu quyền đang chờ |
 
 ---
 
@@ -271,6 +309,15 @@ WORKER_MODEL=gpt-4o-mini
 ---
 
 ## Changelog
+
+### v0.5.0 — Dynamic Permissions + Audit Trail
+- **`db_query` meta-tool**: 1 tool generic thay 20+ tools riêng — AI tự CRUD bất kỳ resource
+- **Permission check**: mọi thao tác qua `db_query` đều check quyền theo role
+- **Grant flow**: `/grant user resource CRUD` — cấp quyền vĩnh viễn, `/revoke` thu hồi
+- **Approval request**: user không đủ quyền → hệ thống gửi yêu cầu cho `reports_to` (1 người)
+- **Owner tracking**: `created_by_user_id`, `created_by_name`, `updated_by_*` trên mọi record
+- **Audit trail**: mọi thao tác CRUD lưu log (ai, làm gì, khi nào)
+- **Commands mới**: `/grant`, `/deny`, `/revoke`, `/permissions`
 
 ### v0.4.0 — Form State + Conversation Summary
 - **Conversation Summary**: auto tóm tắt mỗi 10 messages → giữ summary + 5 recent → tiết kiệm tokens
