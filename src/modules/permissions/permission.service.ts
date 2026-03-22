@@ -16,13 +16,13 @@ import { nowMs } from "../../utils/clock.js";
 // ── Default permissions per role ─────────────────────────────
 
 const DEFAULT_PERMISSIONS: Record<string, Record<string, string>> = {
-  admin: {}, // admin = full, no need to list
+  admin: {}, // admin = full (CRUDM on everything), no need to list
   manager: {
-    form_templates: "CRUD",
-    workflow_templates: "CRUD",
-    business_rules: "CRU",
-    collections: "CRUD",
-    collection_rows: "CRUD",
+    form_templates: "CRUDM",
+    workflow_templates: "CRUDM",
+    business_rules: "CRUM",
+    collections: "CRUDM",
+    collection_rows: "CRUDM",
     knowledge_entries: "CR",
     tenant_users: "R",
   },
@@ -44,10 +44,10 @@ const DEFAULT_PERMISSIONS: Record<string, Record<string, string>> = {
   },
 };
 
-type Action = "C" | "R" | "U" | "D";
+type Action = "C" | "R" | "U" | "D" | "M";
 
 const ACTION_MAP: Record<string, Action> = {
-  create: "C", list: "R", get: "R", update: "U", delete: "D",
+  create: "C", list: "R", get: "R", update: "U", delete: "D", manage: "M", grant: "M", revoke: "M",
 };
 
 // ── Check permission ─────────────────────────────────────────

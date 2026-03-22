@@ -10,7 +10,7 @@
 import "dotenv/config";
 import { eq, and } from "drizzle-orm";
 import { getConfig } from "../config.js";
-import { processWithCommander, type CommanderResponse } from "./agent-bridge.js";
+import { processWithCommander } from "./agent-bridge.js";
 import { MessageQueue, type QueueJob } from "./message-queue.js";
 import { getOrCreateSession, appendMessage } from "../modules/conversations/conversation.service.js";
 import { listFiles } from "../modules/storage/s3.service.js";
@@ -285,7 +285,7 @@ async function handleJob(job: QueueJob): Promise<void> {
 
   // ── Auto-summarize if history too long ──
   try {
-    const { autoSummarize, buildOptimizedHistory } = await import("../modules/conversations/conversation.service.js");
+    const { autoSummarize } = await import("../modules/conversations/conversation.service.js");
     await autoSummarize(session.id, async (text: string) => {
       // Use fast API to summarize (cheap + fast)
       const { callFastAPI } = await import("../modules/agents/agent-runner.js");
@@ -553,6 +553,26 @@ async function pollLoop(): Promise<void> {
             let targetId = grantMatch[1];
             const resource = grantMatch[2];
             const access = grantMatch[3].toUpperCase();
+
+            // Check: granter must have M (manage) permission on this resource
+            const { checkPermission: cp } = await import("../modules/permissions/permission.service.js");
+            const canManage = await cp(tenantId, userId, userRole, resource, "manage");
+            if (!canManage.allowed) {
+              await sendTelegramMessage(msg.chat.id, `⛔ Bạn không có quyền Manage trên <b>${resource}</b>. Không thể cấp quyền.`);
+              continue;
+            }
+
+            // Cannot grant more than own permissions (except admin)
+            if (userRole !== "admin") {
+              const ownPerm = await cp(tenantId, userId, userRole, resource, "create");
+              for (const c of access) {
+                if (c === "M") {
+                  await sendTelegramMessage(msg.chat.id, `⛔ Chỉ Admin mới được cấp quyền Manage (M).`);
+                  continue;
+                }
+              }
+            }
+
             // Resolve name to ID if needed
             if (!/^\d+$/.test(targetId)) {
               const _db = getDb();
