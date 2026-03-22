@@ -172,7 +172,9 @@ src/
        ├── orchestration/   Task decomposition, DAG, auto-assign
        ├── workflows/       Workflow + form + rules engine
        ├── storage/         S3 + PDF/DOCX/XLSX extraction
-       ├── decisions/       Audit trail
+       ├── permissions/      Dynamic RBAC + approval flow + audit
+       ├── conversations/   Session state + form state + summary
+       ├── decisions/       Decision audit trail
        ├── monitoring/      Health check, budget
        └── ...
 ```
@@ -188,10 +190,61 @@ src/
 | `/approve <id>` | admin | Duyệt đăng ký |
 | `/reject <id>` | admin | Từ chối đăng ký |
 | `/pending` | admin | Xem đăng ký chờ duyệt |
-| `/grant <user> <resource> <access>` | admin/manager | Cấp quyền (CRUD/CRU/CR/R) |
+| `/grant <user> <resource> <access>` | admin/manager (cần M) | Cấp quyền (CRUDM/CRUD/CRU/CR/R) |
 | `/deny <requestId>` | admin/manager | Từ chối yêu cầu quyền |
 | `/revoke <user> <resource>` | admin/manager | Thu hồi quyền |
 | `/permissions` | admin/manager | Xem yêu cầu quyền đang chờ |
+
+---
+
+## Testing Guide
+
+### 1. Form State — multi-step form
+
+```
+User: "nhập đơn hàng"
+→ Bot gọi start_form → hỏi field đầu tiên
+→ Nhập 3-4 field liên tiếp
+→ Hỏi "bước 1 tôi nhập gì?" → bot trả lời đúng từ DB
+→ "sửa bước 2 thành ABC" → bot update DB
+→ Tắt app, quay lại "tiếp tục nhập đơn" → resume đúng chỗ
+```
+
+### 2. Permission — quyền mặc định
+
+```
+Manager nhắn: "tạo form mới tên Test" → OK (có quyền C trên form_templates)
+Sales nhắn: "xoá form Test" → Từ chối (sales không có D trên form_templates)
+Admin nhắn: bất kỳ → OK (full quyền)
+```
+
+### 3. Approval Flow — xin quyền
+
+```
+Sales nhắn: "tạo workflow mới"
+→ Bot: "Bạn chưa có quyền. Gửi yêu cầu cho [Manager]?"
+→ Sales: "ok"
+→ Manager nhận: "🔔 [Sales] xin quyền CRU trên workflow_templates"
+→ Manager: /grant <sales_id> workflow_templates CRU
+→ Sales nhận: "🔓 Bạn đã được cấp quyền CRU trên workflow_templates"
+→ Sales tự tạo workflow từ giờ — không cần hỏi lại
+```
+
+### 4. Grant/Revoke commands
+
+```
+/grant kristina knowledge_entries CRUD     → cấp quyền
+/revoke kristina knowledge_entries          → thu hồi
+/permissions                                → xem yêu cầu đang chờ
+```
+
+### 5. Conversation Summary
+
+```
+Chat > 15 messages → hệ thống tự tóm tắt
+→ Prompt nhẹ hơn, token ít hơn
+→ Bot vẫn nhớ context quan trọng
+```
 
 ---
 
