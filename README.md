@@ -10,54 +10,28 @@ Hệ thống quản lý multi-bot AI, tự học, phân quyền dynamic, quản 
 
 OpenClaw biến mỗi bot Telegram thành **trợ lý AI thông minh** cho tổ chức. Mỗi bot có persona riêng, data riêng, users riêng — chạy trên cùng 1 hạ tầng.
 
+### Sơ đồ 1 — Multi-Bot (tổng quan hệ thống)
+
 ```mermaid
 graph TD
-    SA[👑 Super Admin] -.->|quản lý bots| SYS
+    SA[👑 Super Admin] -.->|quản lý tất cả bots| SYS
 
     subgraph SYS[🏗️ OpenClaw — 1 Process, N Bots]
-        B1[🤖 Milo — Kinh doanh]
-        B2[🤖 Zero — Tech]
-        BN[🤖 Bot N — Custom]
+        B1[🤖 Milo<br/>Kinh doanh]
+        B2[🤖 Zero<br/>Tech]
+        BN[🤖 Bot N<br/>Custom]
     end
 
-    U[👤 User — Telegram] -->|nhắn bot| B1 & B2 & BN
-    B1 & B2 & BN -->|message + tenant_id| Q[📬 Message Queue<br/>5 concurrent]
+    U1[👤 User A] -->|nhắn| B1
+    U2[👤 User B] -->|nhắn| B2
+    U3[👤 User C] -->|nhắn| BN
 
-    Q -->|priority sort| P[🔐 Permission Check<br/>CRUDM]
-    P -->|allowed| C[🧠 Commander]
-    P -->|denied| AR[📩 Xin quyền]
-    AR -->|bắn 1 người| MGR[👔 Manager/Admin]
-    MGR -->|/grant| P
-
-    C -->|phân rã task| S1[📋 Supervisor 1]
-    C -->|phân rã task| S2[📋 Supervisor 2]
-
-    S1 -->|giao việc| W1[⚙️ Worker 1]
-    S1 -->|giao việc| W2[⚙️ Worker 2]
-    S2 -->|giao việc| W3[⚙️ Worker 3]
-
-    W1 & W2 & W3 -->|gọi tools| T[🔧 Tool Registry<br/>30 tools]
-
-    T --> DB[(🗄️ PostgreSQL<br/>tenant isolation)]
-    T --> S3[📦 S3 Storage]
-    T --> KB[📚 Knowledge Base<br/>self-learning]
-    T --> AL[📝 Audit Log]
-
-    KB -.->|kiến thức đã học| C
+    B1 & B2 & BN --> DB[(🗄️ PostgreSQL)]
 
     style SA fill:#FFD700,color:#000
     style B1 fill:#4A90D9,color:#fff
     style B2 fill:#2ECC71,color:#fff
     style BN fill:#9B59B6,color:#fff
-    style C fill:#4A90D9,color:#fff
-    style P fill:#E74C3C,color:#fff
-    style S1 fill:#7B68EE,color:#fff
-    style S2 fill:#7B68EE,color:#fff
-    style W1 fill:#2ECC71,color:#fff
-    style W2 fill:#2ECC71,color:#fff
-    style W3 fill:#2ECC71,color:#fff
-    style AL fill:#F39C12,color:#fff
-    style KB fill:#F39C12,color:#fff
 ```
 
 ```
@@ -68,10 +42,39 @@ Mỗi bot có riêng — data hoàn toàn tách biệt:
 
 Persona lưu DB — bot tự nhớ vai trò:
   User: "bạn là bot tech" → update_ai_config → lưu DB → restart vẫn nhớ
-  User: "nhớ giùm stack: Node.js + Docker" → save_knowledge → lưu DB
 ```
 
-### Agent System — ai làm gì?
+---
+
+### Sơ đồ 2 — Agent Pipeline (bên trong 1 bot)
+
+```mermaid
+graph TD
+    U[👤 User nhắn tin] --> Q[📬 Message Queue<br/>5 concurrent]
+    Q --> C[🧠 Commander<br/>Hiểu ý định, phân rã task]
+
+    C -->|subtask 1| S1[📋 Supervisor]
+    S1 -->|giao việc| W1[⚙️ Worker 1]
+    S1 -->|giao việc| W2[⚙️ Worker 2]
+
+    W1 & W2 -->|gọi tools| T[🔧 Tool Registry<br/>30 tools]
+    T --> DB[(🗄️ PostgreSQL)]
+    T --> S3[📦 S3 Storage]
+    T --> KB[📚 Knowledge Base]
+
+    KB -.->|kiến thức đã học| C
+    W1 & W2 -.->|kết quả| S1
+    S1 -.->|tổng hợp| C
+    C -.->|response| U
+
+    style C fill:#4A90D9,color:#fff
+    style S1 fill:#7B68EE,color:#fff
+    style W1 fill:#2ECC71,color:#fff
+    style W2 fill:#2ECC71,color:#fff
+    style KB fill:#F39C12,color:#fff
+```
+
+#### Agent System — ai làm gì?
 
 | Agent | Vai trò |
 |-------|---------|
@@ -80,21 +83,55 @@ Persona lưu DB — bot tự nhớ vai trò:
 | **⚙️ Worker** | Thực thi — nhận 1 task cụ thể, gọi tools (đọc file, query DB, tạo đơn...), trả kết quả |
 
 ```
-Ví dụ: User hỏi "đọc cẩm nang sale, tóm tắt, rồi tạo quy trình onboarding"
+Ví dụ: User hỏi "đọc tài liệu, tóm tắt, rồi tạo quy trình mới"
 
 Commander nhận → phân rã:
-  ├── Subtask 1: đọc file cẩm nang → giao Worker 1
+  ├── Subtask 1: đọc file → giao Worker 1
   ├── Subtask 2: phân tích nội dung → giao Worker 2 (chờ subtask 1)
   └── Subtask 3: tạo workflow → giao Worker 3 (chờ subtask 2)
-
-Worker 1: read_file_content → trả nội dung
-Worker 2: nhận nội dung → tóm tắt
-Worker 3: create_workflow → tạo quy trình
 
 Commander: tổng hợp kết quả → trả user
 ```
 
 > Tạo agent mới qua chat — không cần code. Agent Templates lưu DB.
+
+---
+
+### Sơ đồ 3 — Phân quyền & Role
+
+```mermaid
+graph TD
+    SA[👑 Super Admin<br/>Quản lý hệ thống] --> A[🔑 Admin<br/>Toàn quyền trong bot]
+    A -->|cấp Manager| M[👔 Manager<br/>Quản lý nhóm]
+    M -->|cấp Staff/Sales| ST[👷 Staff / Sales<br/>Thực thi]
+
+    ST -->|xin quyền| M
+    M -->|xin quyền| A
+
+    subgraph CRUDM[Quyền trên mỗi resource]
+        CR[C — Create]
+        RE[R — Read]
+        UP[U — Update]
+        DE[D — Delete]
+        MA[M — Manage<br/>cấp quyền cho người dưới]
+    end
+
+    A -.->|grant/deny| CRUDM
+
+    style SA fill:#FFD700,color:#000
+    style A fill:#E74C3C,color:#fff
+    style M fill:#7B68EE,color:#fff
+    style ST fill:#2ECC71,color:#fff
+    style MA fill:#F39C12,color:#fff
+```
+
+```
+Khi không đủ quyền:
+  → Bot hỏi "Gửi yêu cầu cho [Manager X]?"
+  → Bắn đúng 1 người (reports_to) — không loạn approve
+  → Manager: /grant user resource CRUD
+  → Mọi thao tác lưu audit log
+```
 
 ---
 
