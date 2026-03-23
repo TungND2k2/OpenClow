@@ -350,16 +350,32 @@ async function handleJob(job: QueueJob): Promise<void> {
   });
 
   // ── Edit progress message → final response ──
-  const formattedText = markdownToTelegramHtml(response.text);
   await appendMessage(session.id, { role: "assistant", content: response.text, at: Date.now() });
 
-  if (progressMsgId && formattedText.length <= 4000) {
-    await editTelegramMessage(job.chatId, progressMsgId, formattedText, tk);
-  } else {
+  // Multi-persona: send each persona message as separate Telegram message
+  if (response.personaMessages && response.personaMessages.length >= 2) {
+    // Delete progress message
     if (progressMsgId) {
       try { await callTelegramWithToken(tk, "deleteMessage", { chat_id: job.chatId, message_id: progressMsgId }); } catch {}
     }
-    await sendTelegramMessage(job.chatId, formattedText, tk);
+    // Send each persona response as separate message
+    for (const pm of response.personaMessages) {
+      const formatted = markdownToTelegramHtml(`${pm.emoji} <b>${pm.name}:</b>\n${pm.content}`);
+      await sendTelegramMessage(job.chatId, formatted, tk);
+      // Small delay between messages for natural feel
+      await new Promise(r => setTimeout(r, 800));
+    }
+  } else {
+    // Single response (normal flow)
+    const formattedText = markdownToTelegramHtml(response.text);
+    if (progressMsgId && formattedText.length <= 4000) {
+      await editTelegramMessage(job.chatId, progressMsgId, formattedText, tk);
+    } else {
+      if (progressMsgId) {
+        try { await callTelegramWithToken(tk, "deleteMessage", { chat_id: job.chatId, message_id: progressMsgId }); } catch {}
+      }
+      await sendTelegramMessage(job.chatId, formattedText, tk);
+    }
   }
 
   // Send files from tool calls

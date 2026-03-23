@@ -14,6 +14,7 @@ import { getDb } from "../db/connection.js";
 import { eq, and } from "drizzle-orm";
 import { notebookWrite } from "../modules/notebooks/notebook.service.js";
 import { storeKnowledge, retrieveKnowledge, mergeOrCreateRule, detectFeedback, applyFeedback } from "../modules/knowledge/knowledge.service.js";
+import { getPersonas, routeToPersonas, runPersonaConversation } from "../modules/agents/persona-conversation.js";
 import { getDashboard } from "../modules/monitoring/monitor.service.js";
 import { startWorkflow } from "../modules/workflows/workflow-engine.service.js";
 import { getFile, listFiles, readFileContent } from "../modules/storage/s3.service.js";
@@ -603,9 +604,16 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
 
 // ── Commander Pipeline ──────────────────────────────────────
 
+export interface PersonaMsg {
+  emoji: string;
+  name: string;
+  content: string;
+}
+
 export interface CommanderResponse {
   text: string;
   files: { url: string; fileName: string; mimeType: string }[];
+  personaMessages?: PersonaMsg[];
 }
 
 export async function processWithCommander(input: {
@@ -777,6 +785,56 @@ export async function processWithCommander(input: {
   try {
     const result = await runner.think(input.userMessage, input.conversationHistory);
 
+    // ── Step 4b: Multi-persona conversation (if personas exist) ──
+    let personaMessages: PersonaMsg[] | undefined;
+    const personas = await getPersonas(input.tenantId);
+
+    if (personas.length >= 2 && input.userMessage.length > 20) {
+      try {
+        const { getConfig: gc3 } = await import("../config.js");
+        const cfg3 = gc3();
+
+        const participants = await routeToPersonas({
+          userMessage: input.userMessage,
+          availablePersonas: personas,
+          engine: effectiveEngine,
+          workerApiBase: cfg3.WORKER_API_BASE!,
+          workerApiKey: cfg3.WORKER_API_KEY!,
+          workerModel: cfg3.WORKER_MODEL!,
+        });
+
+        if (participants.length >= 2) {
+          await input.onProgress?.("💬 Các personas đang trao đổi...");
+          console.error(`[Pipeline] Persona conversation: ${participants.join(" → ")}`);
+
+          const pMessages = await runPersonaConversation({
+            userMessage: input.userMessage,
+            personas,
+            participantNames: participants,
+            conversationHistory: input.conversationHistory,
+            executeTool: async (tool, args) => {
+              return await executeTool(tool, args, input.tenantId);
+            },
+            engine: effectiveEngine,
+          });
+
+          if (pMessages.length > 0) {
+            personaMessages = pMessages.map(m => ({
+              emoji: m.persona.emoji,
+              name: m.persona.name,
+              content: m.content,
+            }));
+            // Override text with summary
+            result.text = pMessages
+              .map(m => `${m.persona.emoji} ${m.persona.name}: ${m.content}`)
+              .join("\n\n");
+          }
+        }
+      } catch (pErr: any) {
+        console.error(`[Pipeline] Persona conversation skipped: ${pErr.message}`);
+      }
+    }
+
     await input.onProgress?.("✍️ Đang tổng hợp câu trả lời...");
 
     // ── Step 5: Complete task + update performance ──────────
@@ -816,7 +874,7 @@ export async function processWithCommander(input: {
     const elapsed = Date.now() - startTime;
     console.error(`[Pipeline] ─── END (${elapsed}ms, ${result.toolCalls.length} tools) ────────────`);
 
-    return { text: result.text, files: _files };
+    return { text: result.text, files: _files, personaMessages };
   } catch (e: any) {
     // ── Error handling ──────────────────────────────────────
     if (task) {
