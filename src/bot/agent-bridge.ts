@@ -13,7 +13,7 @@
 import { getDb } from "../db/connection.js";
 import { eq, and } from "drizzle-orm";
 import { notebookWrite } from "../modules/notebooks/notebook.service.js";
-import { storeKnowledge, retrieveKnowledge, mergeOrCreateRule } from "../modules/knowledge/knowledge.service.js";
+import { storeKnowledge, retrieveKnowledge, mergeOrCreateRule, detectFeedback, applyFeedback } from "../modules/knowledge/knowledge.service.js";
 import { getDashboard } from "../modules/monitoring/monitor.service.js";
 import { startWorkflow } from "../modules/workflows/workflow-engine.service.js";
 import { getFile, listFiles, readFileContent } from "../modules/storage/s3.service.js";
@@ -36,6 +36,8 @@ import { nowMs } from "../utils/clock.js";
 // Per-request context for form + permission tools
 let _currentSessionId: string | null = null;
 let _currentUser: { id: string; name: string; role: string } | null = null;
+// Track last tools called per session — for feedback detection
+const _lastToolsCalledBySession = new Map<string, string[]>();
 
 // ── Tool Registry ─────────────────────────────────────────────
 
@@ -654,6 +656,37 @@ export async function processWithCommander(input: {
     task = null;
   }
 
+  // ── Step 0: Feedback Detection (ngầm, user không biết) ───
+  const lastBotMsg = input.conversationHistory
+    .filter(m => m.role === "assistant")
+    .at(-1)?.content ?? "";
+  const lastToolsCalled = _lastToolsCalledBySession.get(input.sessionId ?? "") ?? [];
+
+  if (lastBotMsg && lastToolsCalled.length > 0) {
+    try {
+      const { getConfig: gc } = await import("../config.js");
+      const cfg = gc();
+      const feedback = await detectFeedback({
+        userMessage: input.userMessage,
+        prevBotResponse: lastBotMsg,
+        workerApiBase: cfg.WORKER_API_BASE!,
+        workerApiKey: cfg.WORKER_API_KEY!,
+        workerModel: cfg.WORKER_MODEL!,
+      });
+
+      if (feedback !== "neutral") {
+        await applyFeedback({
+          feedback,
+          userMessage: input.userMessage,
+          lastToolsCalled,
+          lastBotResponse: lastBotMsg,
+        });
+      }
+    } catch (fbErr: any) {
+      console.error(`[Pipeline] Feedback detect skipped: ${fbErr.message}`);
+    }
+  }
+
   // ── Step 2: Query Knowledge Base ─────────────────────────
   await input.onProgress?.("🔍 Đang tìm kiếm kiến thức...");
   const keywords = input.userMessage.toLowerCase().split(/\s+/).filter(w => w.length > 2);
@@ -668,7 +701,10 @@ export async function processWithCommander(input: {
   let knowledgeContext = "";
   if (knowledge.length > 0 && knowledge[0].matchScore > 0.3) {
     console.error(`[Pipeline] Knowledge: ${knowledge.length} entries (top: ${knowledge[0].matchScore.toFixed(2)})`);
-    knowledgeContext = `\n\nKNOWLEDGE BASE (đã học, ưu tiên dùng):\n${knowledge.map(k => `[${k.type}] ${k.title}: ${k.content.substring(0, 300)}`).join("\n\n")}`;
+    knowledgeContext = `\n\nKNOWLEDGE BASE (đã học, ưu tiên dùng):\n${knowledge.map(k => {
+      const rejected = (k.content ?? "").includes("⚠️ REJECTED");
+      return `[${k.type}${rejected ? " ⚠️ BỊ REJECT" : ""}] ${k.title}: ${k.content.substring(0, 300)}`;
+    }).join("\n\n")}`;
   } else {
     console.error(`[Pipeline] Knowledge: none`);
   }
@@ -765,6 +801,9 @@ export async function processWithCommander(input: {
         console.error(`[Pipeline] Knowledge save warn: ${ke.message}`);
       }
     }
+
+    // ── Step 6b: Save context for feedback detection next turn
+    _lastToolsCalledBySession.set(input.sessionId ?? "", result.toolCalls.map(t => t.tool));
 
     // ── Step 7: Audit ──────────────────────────────────────
     await recordDecision({

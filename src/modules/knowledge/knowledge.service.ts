@@ -267,6 +267,123 @@ export async function cleanupDuplicateRules(): Promise<number> {
   return deletedCount;
 }
 
+// ── Feedback Loop ───────────────────────────────────────────
+
+/**
+ * Detect user satisfaction by calling fast-api (LLM-based, no hardcode).
+ * Returns: "positive" | "negative" | "neutral"
+ */
+export async function detectFeedback(input: {
+  userMessage: string;
+  prevBotResponse: string;
+  workerApiBase: string;
+  workerApiKey: string;
+  workerModel: string;
+}): Promise<"positive" | "negative" | "neutral"> {
+  if (!input.prevBotResponse || input.prevBotResponse.length < 5) return "neutral";
+
+  try {
+    const resp = await fetch(`${input.workerApiBase}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${input.workerApiKey}`,
+      },
+      body: JSON.stringify({
+        model: input.workerModel,
+        messages: [{
+          role: "user",
+          content: `Bot vừa trả lời: "${input.prevBotResponse.substring(0, 300)}"
+User reply: "${input.userMessage.substring(0, 200)}"
+
+User có hài lòng với câu trả lời của bot không?
+- "positive" = hài lòng, chấp nhận, dùng kết quả
+- "negative" = không vừa ý, sửa, hỏi lại, phàn nàn
+- "neutral" = chuyển topic khác, không liên quan
+
+Chỉ trả lời đúng 1 từ: positive hoặc negative hoặc neutral`,
+        }],
+        max_tokens: 5,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!resp.ok) return "neutral";
+    const data = (await resp.json()) as any;
+    const answer = (data.choices?.[0]?.message?.content ?? "").trim().toLowerCase();
+
+    if (answer.includes("positive")) return "positive";
+    if (answer.includes("negative")) return "negative";
+    return "neutral";
+  } catch {
+    return "neutral";
+  }
+}
+
+/**
+ * Apply feedback to the most recently used knowledge rule.
+ * - Negative: decrease use_count, add "rejected" context
+ * - Positive: increase use_count, mark as "accepted"
+ */
+export async function applyFeedback(input: {
+  feedback: "positive" | "negative";
+  userMessage: string;
+  lastToolsCalled: string[];
+  lastBotResponse: string;
+  reason?: string;
+}): Promise<void> {
+  const db = getDb();
+  const now = nowMs();
+
+  if (input.lastToolsCalled.length === 0) return;
+
+  // Find the rule that was just used (by tools signature)
+  const intentKey = [...new Set(input.lastToolsCalled)].sort().join(",");
+  const allRules = await db.select().from(knowledgeEntries)
+    .where(and(
+      eq(knowledgeEntries.type, "best_practice"),
+      sql`${knowledgeEntries.supersededById} IS NULL`,
+    )).limit(200);
+
+  const rule = allRules.find(r => {
+    const content = r.content as string;
+    const toolMatch = content.match(/tools:\s*(.+)/);
+    if (!toolMatch) return false;
+    const existingTools = toolMatch[1].split(",").map(t => t.trim()).sort().join(",");
+    return existingTools === intentKey;
+  });
+
+  if (!rule) return;
+
+  if (input.feedback === "negative") {
+    // Decrease use_count (min 0)
+    const newCount = Math.max(0, (rule.usageCount ?? 0) - 1);
+
+    // Append rejection context to content
+    const rejectionNote = `\n⚠️ REJECTED: "${input.userMessage}" → user nói "${input.reason ?? "không vừa ý"}"`;
+    const updatedContent = (rule.content as string) + rejectionNote;
+
+    await db.update(knowledgeEntries).set({
+      usageCount: newCount,
+      outcome: "failure",
+      content: updatedContent.substring(0, 2000),
+      updatedAt: now,
+    }).where(eq(knowledgeEntries.id, rule.id));
+
+    console.error(`[Knowledge] ✗ Feedback negative on "${rule.title}" (use_count: ${newCount})`);
+
+  } else if (input.feedback === "positive") {
+    await db.update(knowledgeEntries).set({
+      usageCount: (rule.usageCount ?? 0) + 1,
+      outcome: "success",
+      updatedAt: now,
+    }).where(eq(knowledgeEntries.id, rule.id));
+
+    console.error(`[Knowledge] ✓ Feedback positive on "${rule.title}" (use_count: ${(rule.usageCount ?? 0) + 1})`);
+  }
+}
+
 /**
  * Record that knowledge was applied to a task.
  */
