@@ -50,11 +50,7 @@ Persona lưu DB — bot tự nhớ vai trò:
 
 ```mermaid
 graph TD
-    U[👤 User nhắn tin] --> FB{🔄 Feedback Detection<br/>User hài lòng?}
-    FB -->|ngầm phân tích| Q[📬 Message Queue<br/>5 concurrent]
-    FB -.->|negative| KB_UPDATE[📉 Giảm use_count<br/>Đánh dấu REJECTED]
-    FB -.->|positive| KB_UP[📈 Tăng use_count<br/>Đánh dấu ACCEPTED]
-
+    U[👤 User nhắn tin] --> Q[📬 Message Queue<br/>5 concurrent]
     Q --> C[🧠 Commander<br/>Hiểu ý định, phân rã task]
 
     C -->|subtask| S1[📋 Supervisor]
@@ -67,11 +63,13 @@ graph TD
     T --> KB[📚 Knowledge Base]
 
     KB -.->|kiến thức đã học<br/>+ rejected context| C
-    KB_UPDATE -.-> KB
-    KB_UP -.-> KB
     W1 & W2 -.->|kết quả| S1
     S1 -.->|tổng hợp| C
-    C -.->|response + lưu lastTools| U
+    C -.->|response| U
+
+    C -.->|sau response| FB[🔄 Feedback Detection<br/>tự phân tích ngầm]
+    FB -.->|positive| KB
+    FB -.->|negative| KB
 
     style C fill:#4A90D9,color:#fff
     style S1 fill:#7B68EE,color:#fff
@@ -79,8 +77,6 @@ graph TD
     style W2 fill:#2ECC71,color:#fff
     style KB fill:#F39C12,color:#fff
     style FB fill:#9B59B6,color:#fff
-    style KB_UPDATE fill:#E74C3C,color:#fff
-    style KB_UP fill:#2ECC71,color:#fff
 ```
 
 ```
