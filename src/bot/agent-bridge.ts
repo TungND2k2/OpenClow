@@ -599,6 +599,52 @@ export async function executeTool(tool: string, args: Record<string, unknown>, t
       return { cancelled: true };
     }
 
+    // ── Cron Tools ─────────────────────────────────────────
+
+    case "create_cron": {
+      if (!_currentUser) return { error: "No user context" };
+      const { createCron } = await import("../modules/cron/cron.service.js");
+      const cron = await createCron({
+        tenantId,
+        name: args.name as string,
+        schedule: args.schedule as string,
+        action: args.action as string,
+        args: (args.action_args as Record<string, unknown>) ?? {},
+        notifyUserId: _currentUser.id,
+        createdByUserId: _currentUser.id,
+        createdByName: _currentUser.name,
+      });
+      return { id: cron.id, name: cron.name, schedule: cron.scheduleDescription, nextRun: new Date(cron.nextRunAt).toISOString() };
+    }
+
+    case "list_crons": {
+      const { listCrons } = await import("../modules/cron/cron.service.js");
+      const crons = await listCrons(tenantId);
+      return crons.map(c => ({
+        id: c.id, name: c.name, schedule: c.scheduleDescription,
+        action: c.action, status: c.status, runCount: c.runCount,
+        lastResult: c.lastResult?.substring(0, 100),
+      }));
+    }
+
+    case "delete_cron": {
+      const { deleteCron } = await import("../modules/cron/cron.service.js");
+      await deleteCron(args.cron_id as string);
+      return { deleted: true };
+    }
+
+    case "pause_cron": {
+      const { pauseCron } = await import("../modules/cron/cron.service.js");
+      await pauseCron(args.cron_id as string);
+      return { paused: true };
+    }
+
+    case "resume_cron": {
+      const { resumeCron } = await import("../modules/cron/cron.service.js");
+      await resumeCron(args.cron_id as string);
+      return { resumed: true };
+    }
+
     // ── SSH Tools (Admin only) ──────────────────────────────
 
     case "ssh_exec": {
