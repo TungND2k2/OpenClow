@@ -150,7 +150,7 @@ ${isLastSpeaker ? "- Đây là lượt cuối — đưa ra kết luận." : ""}`
 
       const runner = new AgentRunner({
         agent: { id: `persona_${persona.name}`, name: persona.name } as any,
-        engine: input.engine,
+        engine: "fast-api" as LLMEngine,  // Always fast-api for persona rounds — CLI too slow
         tools: [],
         systemPrompt,
         executeTool: input.executeTool,

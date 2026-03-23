@@ -796,7 +796,7 @@ export async function startTelegramBot(): Promise<void> {
   _queue = new MessageQueue(handleJob, {
     concurrency: 5,
     maxQueueSize: 100,
-    jobTimeoutMs: 60000,
+    jobTimeoutMs: 180000,
   });
   _queue.start();
   _running = true;
