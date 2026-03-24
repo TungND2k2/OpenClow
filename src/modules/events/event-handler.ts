@@ -25,9 +25,18 @@ export function setAgentTrigger(cb: (tenantId: string, message: string, context?
  */
 export async function handleEvent(event: AgentEvent): Promise<void> {
   const subs = getMatchingSubscriptions(event);
-  if (subs.length === 0) return;
 
-  console.error(`[EventHandler] ${event.type}:${event.collection ?? ""} → ${subs.length} subscriptions matched`);
+  console.error(`[EventBus] Event: ${event.type}:${event.collection ?? ""} | by: ${event.triggeredBy ?? "system"} | data: ${JSON.stringify(event.data ?? {}).substring(0, 100)}`);
+  console.error(`[EventBus] Subscriptions checked: ${subs.length} matched (tenant: ${event.tenantId.substring(0, 8)})`);
+
+  if (subs.length === 0) {
+    console.error(`[EventBus] No subscriptions → skip`);
+    return;
+  }
+
+  for (const s of subs) {
+    console.error(`[EventBus]   → ${s.agentName} (pattern: "${s.eventPattern}")`);
+  }
 
   for (const sub of subs) {
     try {
@@ -49,12 +58,15 @@ export async function handleEvent(event: AgentEvent): Promise<void> {
         .replace("{{changedFields}}", (event.changedFields ?? []).join(", "))
         .replace("{{triggeredBy}}", event.triggeredBy ?? "system");
 
-      console.error(`[EventHandler] Trigger ${sub.agentName}: "${message.substring(0, 80)}..."`);
+      console.error(`[EventBus] Trigger → ${sub.agentName}: "${message.substring(0, 100)}"`);
 
       if (_triggerAgentCallback) {
-        // Fire async — don't block
+        console.error(`[EventBus] Injecting into pipeline...`);
         _triggerAgentCallback(event.tenantId, `[AUTO] ${sub.agentName}: ${message}`, context)
-          .catch(e => console.error(`[EventHandler] Trigger failed: ${e.message}`));
+          .then(() => console.error(`[EventBus] ✓ ${sub.agentName} pipeline complete`))
+          .catch(e => console.error(`[EventBus] ✗ ${sub.agentName} failed: ${e.message}`));
+      } else {
+        console.error(`[EventBus] ⚠️ No trigger callback set — agent message not injected`);
       }
     } catch (e: any) {
       console.error(`[EventHandler] Error processing subscription ${sub.id}: ${e.message}`);

@@ -65,6 +65,7 @@ export async function executeMiddleware(ctx: PipelineContext): Promise<void> {
       if (MUTATING_TOOLS.has(tool)) {
         invalidateCache(ctx.tenantId);
         // Emit event for agent subscriptions (async, non-blocking)
+        console.error(`[Execute] Mutating tool "${tool}" → emitting event`);
         const event = {
           type: tool.startsWith("create_") ? "row.created" : tool.startsWith("update_") ? "row.updated" : tool === "delete_row" ? "row.deleted" : "data.changed",
           tenantId: ctx.tenantId,
