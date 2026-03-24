@@ -43,7 +43,13 @@ export async function executeMiddleware(ctx: PipelineContext): Promise<void> {
 
   let result: { text: string; toolCalls: { tool: string }[] };
 
+  console.error(`[Execute] Engine: ${ctx.engine}`);
+  console.error(`[Execute] Personas: ${ctx.personas.length} (${ctx.personas.map(p => p.name).join(", ")})`);
+  console.error(`[Execute] History in prompt: ${ctx.conversationHistory.length} messages`);
+  console.error(`[Execute] System prompt: ${ctx.systemPrompt.length} chars`);
+
   if (ctx.personas.length >= 2 && ctx.userMessage.length > 15) {
+    console.error(`[Execute] → Multi-persona mode`);
     // Route to personas — skip Commander
     try {
       const { getConfig: gc3 } = await import("../../config.js");
@@ -102,6 +108,7 @@ export async function executeMiddleware(ctx: PipelineContext): Promise<void> {
     }
   } else {
     // No personas or short message — Commander handles directly
+    console.error(`[Execute] → Commander direct mode`);
     result = await runner.think(ctx.userMessage, ctx.conversationHistory);
   }
 
@@ -109,4 +116,6 @@ export async function executeMiddleware(ctx: PipelineContext): Promise<void> {
 
   ctx.text = result.text;
   ctx.toolCalls = result.toolCalls.map(t => ({ tool: t.tool, args: (t as any).args, result: (t as any).result }));
+
+  console.error(`[Execute] Response: ${ctx.text.length} chars, ${ctx.toolCalls.length} tools: [${ctx.toolCalls.map(t => t.tool).join(", ")}]`);
 }

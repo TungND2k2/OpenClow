@@ -61,6 +61,8 @@ export async function processWithCommander(input: {
   console.error(`[Pipeline] ─── START ───────────────────────────`);
   console.error(`[Pipeline] User: ${input.userName} (${input.userRole})`);
   console.error(`[Pipeline] Message: "${input.userMessage}"`);
+  console.error(`[Pipeline] Tenant: ${input.tenantId}`);
+  console.error(`[Pipeline] History: ${input.conversationHistory.length} messages`);
 
   // ── Get Commander agent ──────────────────────────────────
   const commander = getCommander();
@@ -131,8 +133,14 @@ export async function processWithCommander(input: {
   try {
     // ── Run middleware pipeline ─────────────────────────────
     for (const mw of middlewares) {
+      const mwName = mw.name || "unknown";
+      const mwStart = Date.now();
       await mw(ctx);
-      if (ctx.done) break;
+      console.error(`[Pipeline] ✓ ${mwName} (${Date.now() - mwStart}ms)`);
+      if (ctx.done) {
+        console.error(`[Pipeline] Done early at ${mwName}`);
+        break;
+      }
     }
 
     // ── Complete task + update performance ──────────────────
