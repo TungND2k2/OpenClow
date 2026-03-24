@@ -869,3 +869,27 @@ registerTool("stop_bot", async (args, _tenantId, ctx) => {
 
   return { stopped: true, tenantId: targetId };
 });
+
+// ── Event Subscriptions ─────────────────────────────────
+
+registerTool("subscribe_agent", async (args, tenantId) => {
+  const { createSubscription } = await import("../modules/events/event-bus.js");
+  return await createSubscription({
+    tenantId,
+    agentTemplateId: (args.agent_template_id as string) ?? "",
+    agentName: args.agent_name as string,
+    eventPattern: args.event_pattern as string,
+    action: args.action as string,
+  });
+});
+
+registerTool("list_subscriptions", async (_args, tenantId) => {
+  const { listSubscriptions } = await import("../modules/events/event-bus.js");
+  return await listSubscriptions(tenantId);
+});
+
+registerTool("unsubscribe_agent", async (args, tenantId) => {
+  const { deleteSubscription } = await import("../modules/events/event-bus.js");
+  await deleteSubscription(args.subscription_id as string, tenantId);
+  return { deleted: true };
+});

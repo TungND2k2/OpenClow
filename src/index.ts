@@ -10,6 +10,8 @@ import { initAgentPool } from "./modules/agents/agent-pool.js";
 import { executeTool } from "./bot/agent-bridge.js";
 import { cleanupDuplicateRules } from "./modules/knowledge/knowledge.service.js";
 import { initResourceCache } from "./modules/cache/resource-cache.js";
+import { onEvent } from "./modules/events/event-bus.js";
+import { handleEvent } from "./modules/events/event-handler.js";
 
 async function main() {
   // 1. Load config
@@ -32,6 +34,9 @@ async function main() {
 
   // 3c. Build resource cache for all tenants
   await initResourceCache();
+
+  // 3d. Wire event bus
+  onEvent(handleEvent);
 
   // 4. Create MCP server
   const server = createMcpServer();

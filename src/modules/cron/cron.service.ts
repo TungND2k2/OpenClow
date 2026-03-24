@@ -234,6 +234,22 @@ export async function tickCrons(
         cron.notifyUserId,
         `⏰ <b>Cron: ${cron.name}</b>\n\n${resultStr}`,
       );
+
+      // Emit event for agent subscriptions
+      try {
+        const { emitEvent } = await import("../events/event-bus.js");
+        const { handleEvent } = await import("../events/event-handler.js");
+        const event = {
+          type: "cron.executed",
+          tenantId: cron.tenantId,
+          collection: cron.action,
+          data: { cronName: cron.name, result: resultStr },
+          triggeredBy: "cron",
+          timestamp: now,
+        };
+        await emitEvent(event);
+        await handleEvent(event);
+      } catch {}
     } catch (err: any) {
       console.error(`[Cron] Error ${cron.name}: ${err.message}`);
 

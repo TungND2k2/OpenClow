@@ -8,6 +8,8 @@ import { routeToPersonas, runPersonaConversation } from "../../modules/agents/pe
 import { executeTool } from "../tool-registry.js";
 import { invalidateCache } from "../../modules/cache/resource-cache.js";
 import { manageContext } from "../../modules/conversations/token-manager.js";
+import { emitEvent } from "../../modules/events/event-bus.js";
+import { handleEvent } from "../../modules/events/event-handler.js";
 import type { PipelineContext } from "./types.js";
 
 const MUTATING_TOOLS = new Set([
@@ -60,7 +62,21 @@ export async function executeMiddleware(ctx: PipelineContext): Promise<void> {
       const argsPreview = tool === "ssh_exec" ? (args.command as string ?? "") : "";
       await ctx.onProgress?.(`🔄 [${toolCallCount}] ${tool}${argsPreview ? `: ${argsPreview.substring(0, 50)}` : ""}...`);
       const toolResult = await executeTool(tool, args, ctx.tenantId, toolCtx);
-      if (MUTATING_TOOLS.has(tool)) invalidateCache(ctx.tenantId);
+      if (MUTATING_TOOLS.has(tool)) {
+        invalidateCache(ctx.tenantId);
+        // Emit event for agent subscriptions (async, non-blocking)
+        const event = {
+          type: tool.startsWith("create_") ? "row.created" : tool.startsWith("update_") ? "row.updated" : tool === "delete_row" ? "row.deleted" : "data.changed",
+          tenantId: ctx.tenantId,
+          collection: (args.collection as string) ?? undefined,
+          rowId: (toolResult as any)?.id ?? (args.row_id as string) ?? undefined,
+          data: (args.data as Record<string, unknown>) ?? undefined,
+          changedFields: args.data ? Object.keys(args.data as object) : undefined,
+          triggeredBy: ctx.userName,
+          timestamp: Date.now(),
+        };
+        emitEvent(event).then(() => handleEvent(event)).catch(() => {});
+      }
       if (toolResult && typeof toolResult === "object" && (toolResult as any).__send_file__) {
         ctx.files.push({ url: (toolResult as any).url, fileName: (toolResult as any).fileName, mimeType: (toolResult as any).mimeType });
       }
