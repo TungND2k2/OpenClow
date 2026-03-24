@@ -9,6 +9,7 @@ import { startTelegramBot, stopTelegramBot } from "./bot/telegram.bot.js";
 import { initAgentPool } from "./modules/agents/agent-pool.js";
 import { executeTool } from "./bot/agent-bridge.js";
 import { cleanupDuplicateRules } from "./modules/knowledge/knowledge.service.js";
+import { initResourceCache } from "./modules/cache/resource-cache.js";
 
 async function main() {
   // 1. Load config
@@ -28,6 +29,9 @@ async function main() {
 
   // 3b. Cleanup duplicate knowledge rules
   await cleanupDuplicateRules();
+
+  // 3c. Build resource cache for all tenants
+  await initResourceCache();
 
   // 4. Create MCP server
   const server = createMcpServer();

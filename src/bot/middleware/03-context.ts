@@ -3,18 +3,27 @@
  */
 
 import { listFiles } from "../../modules/storage/s3.service.js";
-import { listCollections } from "../../modules/collections/collection.service.js";
 import { getFormState } from "../../modules/conversations/conversation.service.js";
 import { getPersonas } from "../../modules/agents/persona-conversation.js";
+import { getResourceSummary, buildResourceSummary, formatSummaryForPrompt } from "../../modules/cache/resource-cache.js";
 import { buildCommanderPrompt } from "../prompt-builder.js";
 import type { PipelineContext } from "./types.js";
 
 export async function contextMiddleware(ctx: PipelineContext): Promise<void> {
-  // ── File context ────────────────────────────────────────
+  // ── Resource cache (no DB query if cached) ────────────
+  let summary = getResourceSummary(ctx.tenantId);
+  if (!summary) {
+    summary = await buildResourceSummary(ctx.tenantId);
+  }
+  const resourceContext = formatSummaryForPrompt(summary);
+  console.error(`[Context] Resources: ${summary.forms.length} forms, ${summary.collections.length} collections, ${summary.filesCount} files`);
+
+  // ── File list (for file IDs in prompt) ────────────────
   const uploadedFiles = await listFiles(ctx.tenantId, 20);
   ctx.fileContext = uploadedFiles.length > 0
-    ? `\n\nFILES ĐÃ UPLOAD:\n${uploadedFiles.map((f: any) => `• ${f.fileName} (ID: ${f.id})`).join("\n")}\nKhi user hỏi về file/cẩm nang/tài liệu → gọi read_file_content(file_id) để đọc.`
+    ? `\n\nFILES:\n${uploadedFiles.map((f: any) => `• ${f.fileName} (ID: ${f.id})`).join("\n")}`
     : "";
+  ctx.fileContext += resourceContext;
 
   // ── Form state context ──────────────────────────────────
   ctx.formContext = "";
@@ -38,8 +47,8 @@ export async function contextMiddleware(ctx: PipelineContext): Promise<void> {
   // ── Onboarding context — guide user proactively ─────────
   ctx.onboardingContext = "";
   try {
-    const collections = await listCollections(ctx.tenantId);
-    const uploadedFileCount = uploadedFiles.length;
+    const collections = summary.collections;
+    const uploadedFileCount = summary.filesCount;
     const workerTemplates = await getPersonas(ctx.tenantId);
     const { listCrons } = await import("../../modules/cron/cron.service.js");
     const crons = await listCrons(ctx.tenantId);
