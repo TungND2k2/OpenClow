@@ -727,8 +727,19 @@ export async function executeTool(
           bot_intro: botPersona,
           language: "vi",
           tone: "professional",
-          rules: ["KHÔNG tự bịa data", "Ngắn gọn, thực tế",
-            "Khi user thay đổi vai trò/persona → gọi update_ai_config để lưu DB"],
+          rules: [
+            "TUYỆT ĐỐI KHÔNG tự bịa/hallucinate data — chỉ trả lời dựa trên data thật từ tools hoặc knowledge base",
+            "Khi user hỏi về file tài liệu (DOCX/PDF/TXT/CSV) → gọi read_file_content",
+            "Khi user gửi hoặc hỏi về ẢNH (JPG/PNG/image) → gọi analyze_image. KHÔNG dùng read_file_content cho ảnh",
+            "Khi user muốn lưu/tạo dữ liệu → dùng create_collection + add_row để LƯU VÀO DB THẬT",
+            "Khi user hỏi xem dữ liệu → gọi list_rows/search_all, KHÔNG tự bịa",
+            "KHÔNG tự tạo URL — gọi send_file(file_id) khi cần gửi file/ảnh",
+            "search_all(keyword) để lọc — KHÔNG load hết rồi lọc text",
+            "Kết quả > 20 rows → trả summary + hỏi xem chi tiết phần nào",
+            "Ngắn gọn, thực tế, đúng trọng tâm",
+            "Task nhiều bước → chạy hết TẤT CẢ cho đến khi HOÀN THÀNH, không dừng hỏi user giữa chừng",
+            "Khi user thay đổi vai trò/persona/config → gọi update_ai_config để LƯU VÀO DB",
+          ],
           tools: {
             business: [
               { name: "list_files", desc: "Xem files" },

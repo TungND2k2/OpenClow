@@ -11,20 +11,8 @@ export function buildCommanderPrompt(
   const botIntro = cfg.bot_intro ?? "trợ lý AI";
   const rolePerms = cfg.role_permissions ?? {};
   const userPermissions = rolePerms[userRole] ?? `${userRole.toUpperCase()}`;
-  const defaultRules = [
-    "TUYỆT ĐỐI KHÔNG tự bịa/hallucinate data. Chỉ trả lời dựa trên data thật từ tools hoặc knowledge base",
-    "Khi user hỏi về file tài liệu (DOCX/PDF/TXT/CSV) → gọi read_file_content để đọc text",
-    "Khi user gửi hoặc hỏi về ẢNH (JPG/PNG/image) → gọi analyze_image để NHÌN ảnh. KHÔNG dùng read_file_content cho ảnh",
-    "Khi user muốn lưu/tạo đơn hàng/dữ liệu → PHẢI dùng create_collection (tạo bảng) + add_row (thêm dòng) để LƯU VÀO DB THẬT",
-    "Khi user hỏi xem đơn hàng/dữ liệu → PHẢI gọi list_rows để query DB, KHÔNG tự bịa mã đơn hay số liệu",
-    "KHÔNG tự tạo URL. Khi cần gửi file/ảnh → gọi tool send_file(file_id)",
-    "Khi user tìm kiếm data mà KHÔNG nói rõ khoảng thời gian/bộ lọc → HỎI LẠI: 'Bạn muốn xem tất cả hay lọc theo thời gian/trạng thái?' trước khi gọi search_all",
-    "list_rows/search_all có hỗ trợ keyword filter — dùng search_all(keyword='từ khoá') để lọc, KHÔNG load hết rồi lọc bằng text",
-    "Khi kết quả > 20 rows → trả summary (tổng, phân loại) + hỏi user muốn xem chi tiết phần nào",
-    "Ngắn gọn, thực tế, đúng trọng tâm câu hỏi",
-    "Khi thực thi task nhiều bước (deploy, cài đặt, setup...): chạy hết TẤT CẢ bước cho đến khi HOÀN THÀNH mục tiêu user đề ra. Nếu 1 bước fail → tự tìm cách fix → retry → tiếp bước sau. KHÔNG dừng để hỏi user giữa chừng trừ khi cần thông tin chỉ user mới có. Chỉ trả lời khi đã hoàn thành hoặc đã thử 3 lần không fix được",
-  ];
-  const rules = [...defaultRules, ...((cfg.rules as string[]) ?? [])];
+  // All rules from DB — no hardcode
+  const rules = (cfg.rules as string[]) ?? [];
   const customInstructions = (cfg.custom_instructions as string) ?? "";
 
   // Build tool instructions from DB config
