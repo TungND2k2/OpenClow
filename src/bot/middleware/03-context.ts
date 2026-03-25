@@ -88,7 +88,17 @@ Chưa có: ${missing.join(", ")}
     }
   } catch {}
 
+  // ── Fetch bot instructions from DB ──────────────────────
+  let instructions = "";
+  try {
+    const db = (await import("../../db/connection.js")).getDb();
+    const { tenants } = await import("../../db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    const tenant = (await db.select({ instructions: tenants.instructions }).from(tenants).where(eq(tenants.id, ctx.tenantId)).limit(1))[0];
+    instructions = tenant?.instructions ?? "";
+  } catch {}
+
   // ── Build final system prompt ───────────────────────────
-  ctx.systemPrompt = buildCommanderPrompt(ctx.tenantName, ctx.userName, ctx.userRole, ctx.aiConfig)
+  ctx.systemPrompt = buildCommanderPrompt(ctx.tenantName, ctx.userName, ctx.userRole, ctx.aiConfig, instructions)
     + ctx.knowledgeContext + ctx.fileContext + ctx.formContext + ctx.onboardingContext;
 }

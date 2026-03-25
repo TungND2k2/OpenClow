@@ -323,6 +323,38 @@ registerTool("update_ai_config", async (args, tenantId) => {
   return { success: true, updated_keys: Object.keys(updates), config: current };
 });
 
+// ── Bot Instructions (self-updating guide) ────────────────────
+
+registerTool("get_instructions", async (_args, tenantId) => {
+  const db = getDb();
+  const { tenants } = await import("../db/schema.js");
+  const tenant = (await db.select({ instructions: tenants.instructions }).from(tenants).where(eq(tenants.id, tenantId)).limit(1))[0];
+  return { instructions: tenant?.instructions ?? "" };
+});
+
+registerTool("update_instructions", async (args, tenantId) => {
+  const db = getDb();
+  const { tenants } = await import("../db/schema.js");
+  const tenant = (await db.select({ instructions: tenants.instructions }).from(tenants).where(eq(tenants.id, tenantId)).limit(1))[0];
+  if (!tenant) return { error: "Tenant not found" };
+
+  const mode = (args.mode as string) ?? "append";
+  const content = args.content as string;
+  if (!content) return { error: "content is required" };
+
+  let newInstructions: string;
+  if (mode === "replace") {
+    newInstructions = content;
+  } else if (mode === "append") {
+    newInstructions = tenant.instructions ? `${tenant.instructions}\n\n${content}` : content;
+  } else {
+    newInstructions = tenant.instructions ? `${tenant.instructions}\n\n${content}` : content;
+  }
+
+  await db.update(tenants).set({ instructions: newInstructions, updatedAt: nowMs() }).where(eq(tenants.id, tenantId));
+  return { success: true, mode, length: newInstructions.length };
+});
+
 registerTool("get_ai_config", async (_args, tenantId) => {
   const db = getDb();
   const { tenants: t } = await import("../db/schema.js");
@@ -943,6 +975,8 @@ const _descs: Record<string, string> = {
   subscribe_agent: "Đăng ký agent theo dõi event (agent_name, event_pattern, action)",
   list_subscriptions: "Xem subscriptions",
   unsubscribe_agent: "Huỷ subscription (subscription_id)",
+  get_instructions: "Xem hướng dẫn bot hiện tại",
+  update_instructions: "Cập nhật hướng dẫn bot (content, mode: append|replace). Dùng khi học được pattern mới hoặc user dạy quy trình",
 };
 
 for (const [name, desc] of Object.entries(_descs)) {
