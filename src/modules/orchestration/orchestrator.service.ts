@@ -9,6 +9,9 @@ import { recordDecision } from "../decisions/decision.service.js";
 import { sendMessage } from "../messaging/message.service.js";
 import { updateAgentStatus, updatePerformance } from "../agents/agent.service.js";
 import { assignTask } from "../tasks/task.service.js";
+import { loadCrons, tickCrons } from "../cron/cron.service.js";
+import { executeTool } from "../../bot/tool-registry.js";
+import { sendCronNotification } from "../../bot/telegram.bot.js";
 
 export interface TickResult {
   offlineAgents: string[];
@@ -181,11 +184,18 @@ let _interval: ReturnType<typeof setInterval> | null = null;
 export function startOrchestrator(): void {
   if (_interval) return;
   const config = getConfig();
-  _interval = setInterval(() => {
+
+  // Load crons from DB on startup
+  loadCrons().catch(e => console.error("[Orchestrator] Cron load error:", e.message));
+
+  _interval = setInterval(async () => {
+    try { await tick(); } catch (err: any) {
+      console.error("[Orchestrator] Tick error:", err.message);
+    }
     try {
-      tick();
-    } catch (err) {
-      console.error("[Orchestrator] Tick error:", err);
+      await tickCrons(executeTool, sendCronNotification);
+    } catch (err: any) {
+      console.error("[Orchestrator] Cron error:", err.message);
     }
   }, config.ORCHESTRATOR_TICK_MS);
   console.log(

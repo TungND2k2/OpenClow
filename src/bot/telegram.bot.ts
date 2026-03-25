@@ -993,3 +993,17 @@ export function stopTelegramBot(): void {
 export function getQueueMetrics() {
   return _queue?.getMetrics() ?? null;
 }
+
+/**
+ * Send cron notification to a user via their tenant's bot.
+ * Used by orchestrator when cron tasks fire.
+ */
+export async function sendCronNotification(tenantId: string, userId: string, message: string): Promise<void> {
+  const bot = _bots.get(tenantId);
+  if (!bot) return;
+  try {
+    await sendTelegramMessage(userId, message, bot.token);
+  } catch (err: any) {
+    console.error(`[Cron] Notification failed (${userId}): ${err.message}`);
+  }
+}
