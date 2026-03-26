@@ -1,40 +1,16 @@
 /**
- * AgentRunner — wrapper around an LLM "brain" for each agent record.
+ * AgentRunner — wrapper around LLM "brain" for each agent.
  *
- * An agent is a DB entity (role, capabilities, performance).
- * An AgentRunner gives it a brain (LLM) so it can think, decide, call tools.
- *
- * LLMs are RESOURCES, not agents:
- *   - Claude Max (SDK)    → Commander brain (complex reasoning)
- *   - x-or.cloud (mini)   → Worker brain (fast execution)
+ * Engines:
+ *   - claude-sdk  → Claude Agent SDK (native tools, Max subscription)
+ *   - fast-api    → OpenAI-compatible API (x-or.cloud, cheap + fast)
  */
 
 import type { InferSelectModel } from "drizzle-orm";
 import type { agents } from "../../db/schemas/agents.js";
 
 export type AgentRecord = InferSelectModel<typeof agents>;
-
-export type LLMEngine = "fast-api" | "claude-cli";
-
-// ── Semaphore — limit concurrent Claude CLI processes ────────
-
-const MAX_CONCURRENT_CLI = 5; // 5.8GB RAM, each CLI ~150MB, 5x = ~750MB
-let _cliRunning = 0;
-const _cliQueue: (() => void)[] = [];
-
-function acquireCLI(): Promise<void> {
-  if (_cliRunning < MAX_CONCURRENT_CLI) {
-    _cliRunning++;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => _cliQueue.push(() => { _cliRunning++; resolve(); }));
-}
-
-function releaseCLI(): void {
-  _cliRunning--;
-  const next = _cliQueue.shift();
-  if (next) next();
-}
+export type LLMEngine = "fast-api" | "claude-sdk" | "claude-cli";
 
 export interface ToolDefinition {
   name: string;
@@ -56,23 +32,15 @@ export interface ThinkResult {
 export interface AgentRunnerConfig {
   agent: AgentRecord;
   engine: LLMEngine;
-  tools: ToolDefinition[];
+  tools: { name: string; description: string; parameters: Record<string, unknown> }[];
   systemPrompt: string;
   executeTool: (tool: string, args: Record<string, unknown>) => Promise<unknown>;
   maxToolLoops?: number;
 }
 
-/**
- * AgentRunner — gives an agent record a "brain" to think with.
- *
- * Usage:
- *   const runner = new AgentRunner({ agent, engine: "claude-sdk", tools, ... });
- *   const result = await runner.think("Analyze this file", history);
- */
 export class AgentRunner {
   readonly agent: AgentRecord;
   readonly engine: LLMEngine;
-  private tools: ToolDefinition[];
   private systemPrompt: string;
   private executeTool: (tool: string, args: Record<string, unknown>) => Promise<unknown>;
   private maxToolLoops: number;
@@ -80,61 +48,138 @@ export class AgentRunner {
   constructor(config: AgentRunnerConfig) {
     this.agent = config.agent;
     this.engine = config.engine;
-    this.tools = config.tools;
     this.systemPrompt = config.systemPrompt;
     this.executeTool = config.executeTool;
-    this.maxToolLoops = config.maxToolLoops ?? 5;
+    this.maxToolLoops = config.maxToolLoops ?? 10;
   }
 
-  /**
-   * Agent thinks about a message, optionally calls tools, returns response.
-   */
   async think(
     userMessage: string,
     conversationHistory: { role: string; content: string }[] = [],
   ): Promise<ThinkResult> {
     const prefix = `[Agent:${this.agent.name}]`;
-    console.error(`${prefix} Thinking (engine: ${this.engine})...`);
 
-    const allToolResults: ToolResult[] = [];
-    let currentHistory = [...conversationHistory];
-    let currentMessage = userMessage;
-
-    for (let loop = 0; loop < this.maxToolLoops; loop++) {
-      const response = await this.callLLM(currentMessage, currentHistory);
-
-      // Parse tool calls from response
-      const toolCalls = this.parseToolCalls(response);
-
-      if (toolCalls.length === 0) {
-        // No tools — final text response
-        const cleanText = response.replace(/```tool_calls[\s\S]*?```/g, "").trim();
-        console.error(`${prefix} Done (${loop} tool loops)`);
-        return { text: cleanText, toolCalls: allToolResults };
+    if (this.engine === "claude-sdk" || this.engine === "claude-cli") {
+      try {
+        return await this.callSDK(userMessage, conversationHistory);
+      } catch (err: any) {
+        console.error(`${prefix} SDK failed: ${err.message.substring(0, 100)} → fallback fast-api`);
+        return this.callFastAPIWithTools(userMessage, conversationHistory);
       }
+    }
+    return this.callFastAPIWithTools(userMessage, conversationHistory);
+  }
 
-      // Execute each tool
-      console.error(`${prefix} Tool loop ${loop + 1}: ${toolCalls.map(t => t.tool).join(", ")}`);
+  /**
+   * Claude Agent SDK — native tool execution via Max subscription.
+   */
+  private async callSDK(
+    userMessage: string,
+    history: { role: string; content: string }[],
+  ): Promise<ThinkResult> {
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const prefix = `[Agent:${this.agent.name}]`;
 
-      const toolResults: { tool: string; args: Record<string, unknown>; result: unknown }[] = [];
-      for (const tc of toolCalls) {
-        console.error(`${prefix} → ${tc.tool}(${JSON.stringify(tc.args).substring(0, 80)})`);
-        try {
-          const result = await this.executeTool(tc.tool, tc.args);
-          toolResults.push({ tool: tc.tool, args: tc.args, result });
-          allToolResults.push({ tool: tc.tool, args: tc.args, result });
-          console.error(`${prefix}   ✓ ${tc.tool} (${JSON.stringify(result).substring(0, 100)})`);
-        } catch (err: any) {
-          const errorResult = { error: err.message };
-          toolResults.push({ tool: tc.tool, args: tc.args, result: errorResult });
-          allToolResults.push({ tool: tc.tool, args: tc.args, result: errorResult });
-          console.error(`${prefix}   ✗ ${tc.tool}: ${err.message}`);
+    const prompt = this.buildPromptWithHistory(userMessage, history);
+    const allToolResults: ToolResult[] = [];
+    let finalText = "";
+
+    console.error(`${prefix} SDK calling...`);
+
+    for await (const msg of query({
+      prompt,
+      options: {
+        systemPrompt: this.systemPrompt,
+        allowedTools: [],
+        maxTurns: this.maxToolLoops,
+      },
+    })) {
+      // Handle different message types
+      if (msg.type === "assistant" && msg.message) {
+        // Text response
+        for (const block of msg.message.content ?? []) {
+          if (typeof block === "string") {
+            finalText += block;
+          } else if (block.type === "text") {
+            finalText += block.text;
+          }
         }
       }
 
-      // Feed tool results back as next message
-      const toolResultText = toolResults
-        .map(r => `[Tool: ${r.tool}] Result:\n${JSON.stringify(r.result, null, 2)}`)
+      if (msg.type === "result" && "result" in msg) {
+        finalText = (msg as any).result ?? finalText;
+      }
+    }
+
+    // Parse tool_calls from text (SDK may still output them as text)
+    const toolCalls = this.parseToolCalls(finalText);
+    if (toolCalls.length > 0) {
+      // Execute tools manually
+      for (const tc of toolCalls) {
+        try {
+          const result = await this.executeTool(tc.tool, tc.args);
+          allToolResults.push({ tool: tc.tool, args: tc.args, result });
+        } catch (err: any) {
+          allToolResults.push({ tool: tc.tool, args: tc.args, result: { error: err.message } });
+        }
+      }
+
+      // Call SDK again with tool results for final response
+      const toolResultText = allToolResults
+        .map(r => `[Tool: ${r.tool}] Result:\n${JSON.stringify(r.result, null, 2).substring(0, 1000)}`)
+        .join("\n\n");
+
+      let followUp = "";
+      for await (const msg of query({
+        prompt: toolResultText + "\n\nDựa trên kết quả tools, trả lời user ngắn gọn.",
+        options: {
+          systemPrompt: this.systemPrompt,
+          allowedTools: [],
+          maxTurns: 1,
+        },
+      })) {
+        if (msg.type === "result" && "result" in msg) followUp = (msg as any).result ?? "";
+      }
+
+      console.error(`${prefix} SDK done: ${allToolResults.length} tools`);
+      return { text: followUp || finalText.replace(/```tool_calls[\s\S]*?```/g, "").trim(), toolCalls: allToolResults };
+    }
+
+    console.error(`${prefix} SDK done: 0 tools`);
+    return { text: finalText.trim(), toolCalls: [] };
+  }
+
+  /**
+   * Fast API with tool parsing — fallback.
+   */
+  private async callFastAPIWithTools(
+    userMessage: string,
+    history: { role: string; content: string }[],
+  ): Promise<ThinkResult> {
+    const allToolResults: ToolResult[] = [];
+    let currentHistory = [...history];
+    let currentMessage = userMessage;
+
+    for (let loop = 0; loop < this.maxToolLoops; loop++) {
+      const response = await this.callFastAPI(currentMessage, currentHistory);
+      const toolCalls = this.parseToolCalls(response);
+
+      if (toolCalls.length === 0) {
+        const cleanText = response.replace(/```tool_calls[\s\S]*?```/g, "").trim();
+        return { text: cleanText, toolCalls: allToolResults };
+      }
+
+      for (const tc of toolCalls) {
+        try {
+          const result = await this.executeTool(tc.tool, tc.args);
+          allToolResults.push({ tool: tc.tool, args: tc.args, result });
+        } catch (err: any) {
+          allToolResults.push({ tool: tc.tool, args: tc.args, result: { error: err.message } });
+        }
+      }
+
+      const toolResultText = allToolResults.slice(-toolCalls.length)
+        .map(r => `[Tool: ${r.tool}] Result:\n${JSON.stringify(r.result, null, 2).substring(0, 1000)}`)
         .join("\n\n");
 
       currentHistory = [
@@ -145,98 +190,9 @@ export class AgentRunner {
       currentMessage = toolResultText;
     }
 
-    // Max loops reached
-    console.error(`${prefix} Max tool loops (${this.maxToolLoops}) reached`);
-    return { text: "Đã đạt giới hạn xử lý. Vui lòng thử lại.", toolCalls: allToolResults };
+    return { text: "Đã đạt giới hạn xử lý.", toolCalls: allToolResults };
   }
 
-  /**
-   * Call the LLM — route to the right engine.
-   */
-  private async callLLM(
-    userMessage: string,
-    history: { role: string; content: string }[],
-  ): Promise<string> {
-    if (this.engine === "claude-cli") {
-      try {
-        return await this.callClaudeCLI(userMessage, history);
-      } catch (cliErr: any) {
-        console.error(`[Agent:${this.agent.name}] CLI failed, fallback to fast-api: ${cliErr.message.substring(0, 80)}`);
-        return this.callFastAPI(userMessage, history);
-      }
-    }
-    return this.callFastAPI(userMessage, history);
-  }
-
-  /**
-   * Claude CLI — uses Max subscription via `claude --print`.
-   * Free with Max account. Forces tool_calls output format.
-   */
-  private async callClaudeCLI(
-    userMessage: string,
-    history: { role: string; content: string }[],
-  ): Promise<string> {
-    const { execFile } = await import("child_process");
-    const { promisify } = await import("util");
-    const execFileAsync = promisify(execFile);
-
-    const prompt = this.buildPromptWithHistory(userMessage, history);
-
-    const toolReminder = `
-
-BẮT BUỘC TUÂN THỦ:
-1. Khi cần data (xem, tạo, sửa, xoá đơn/file/user) → OUTPUT tool_calls block TRƯỚC, KHÔNG trả lời text
-2. Format BẮT BUỘC:
-\`\`\`tool_calls
-[{"tool":"tên_tool","args":{"key":"value"}}]
-\`\`\`
-3. KHÔNG BAO GIỜ tự bịa/giả data. Nếu chưa gọi tool → chưa có data → PHẢI gọi tool
-4. Chỉ trả lời text khi: chào hỏi, giải thích chung, hoặc đã có tool result`;
-
-    const fullPrompt = `${this.systemPrompt}${toolReminder}\n\n---\n\n${prompt}`;
-
-    await acquireCLI();
-    console.error(`[Agent:${this.agent.name}] CLI slot acquired (${_cliRunning}/${MAX_CONCURRENT_CLI}, queued: ${_cliQueue.length})`);
-
-    try {
-      const child = execFileAsync(
-        "claude",
-        ["--print", "--output-format", "text", "--max-turns", "15",
-         "--system-prompt", this.systemPrompt + toolReminder,
-         "--no-session-persistence"],
-        {
-          encoding: "utf-8",
-          timeout: 60_000,
-          cwd: "/tmp",
-          maxBuffer: 10 * 1024 * 1024,
-        },
-      );
-
-      // Write only user message to stdin (system prompt via --system-prompt flag)
-      child.child.stdin?.write(prompt);
-      child.child.stdin?.end();
-
-      const { stdout } = await child;
-      return (stdout ?? "").trim();
-    } catch (err: any) {
-      const msg = err.message ?? "";
-      if (/unauthorized|token.*expired|401|authentication/i.test(msg)) {
-        console.error(`\n[TOKEN EXPIRED] ════════════════════════════════════`);
-        console.error(`[TOKEN EXPIRED] Claude Max token hết hạn!`);
-        console.error(`[TOKEN EXPIRED] Chạy: scp ~/.claude/.credentials.json root@server:~/.claude/`);
-        console.error(`[TOKEN EXPIRED] Hoặc: claude auth login (trên server)`);
-        console.error(`[TOKEN EXPIRED] ════════════════════════════════════\n`);
-        throw new Error("Token hết hạn. Admin cần refresh token.");
-      }
-      throw new Error(`Claude CLI failed: ${msg.substring(0, 200)}`);
-    } finally {
-      releaseCLI();
-    }
-  }
-
-  /**
-   * Fast API (OpenAI-compatible) — quick responses.
-   */
   private async callFastAPI(
     userMessage: string,
     history: { role: string; content: string }[],
@@ -250,31 +206,24 @@ BẮT BUỘC TUÂN THỦ:
       { role: "user", content: userMessage },
     ];
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
+    const resp = await fetch(`${config.WORKER_API_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.WORKER_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: config.WORKER_MODEL,
+        messages,
+        max_tokens: 2048,
+        temperature: 0.3,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
 
-    try {
-      const resp = await fetch(`${config.WORKER_API_BASE}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${config.WORKER_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: config.WORKER_MODEL,
-          messages,
-          max_tokens: 2048,
-          temperature: 0.3,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!resp.ok) throw new Error(`API ${resp.status}: ${await resp.text()}`);
-      const data = (await resp.json()) as any;
-      return data.choices?.[0]?.message?.content ?? "Không có phản hồi.";
-    } finally {
-      clearTimeout(timeout);
-    }
+    if (!resp.ok) throw new Error(`API ${resp.status}`);
+    const data = (await resp.json()) as any;
+    return data.choices?.[0]?.message?.content ?? "";
   }
 
   private buildPromptWithHistory(
@@ -295,27 +244,23 @@ BẮT BUỘC TUÂN THỦ:
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);
-      if (match) {
-        try {
-          const parsed = JSON.parse(match[1].trim());
-          if (Array.isArray(parsed)) {
-            return parsed
-              .filter((c: any) => c.tool && typeof c.tool === "string")
-              .map((c: any) => ({ tool: c.tool, args: c.args ?? {} }));
-          }
-        } catch {}
-      }
+      if (!match) continue;
+      try {
+        const parsed = JSON.parse(match[1].trim());
+        const arr = Array.isArray(parsed) ? parsed : [parsed];
+        return arr.filter((t: any) => t.tool).map((t: any) => ({
+          tool: t.tool,
+          args: t.args ?? {},
+        }));
+      } catch { continue; }
     }
     return [];
   }
-
-  updateSystemPrompt(prompt: string): void {
-    this.systemPrompt = prompt;
-  }
 }
 
-// ── Standalone fast API call (for summarization etc.) ────────
-
+/**
+ * Standalone fast-api call — used by compactor + feedback detection.
+ */
 export async function callFastAPI(
   userMessage: string,
   systemPrompt: string,
@@ -323,18 +268,29 @@ export async function callFastAPI(
 ): Promise<string> {
   const { getConfig } = await import("../../config.js");
   const config = getConfig();
+
   const messages = [
     { role: "system", content: systemPrompt },
     ...history.map(h => ({ role: h.role, content: h.content })),
     { role: "user", content: userMessage },
   ];
+
   const resp = await fetch(`${config.WORKER_API_BASE}/chat/completions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.WORKER_API_KEY}` },
-    body: JSON.stringify({ model: config.WORKER_MODEL, messages, max_tokens: 512, temperature: 0.2 }),
-    signal: AbortSignal.timeout(15_000),
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.WORKER_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: config.WORKER_MODEL,
+      messages,
+      max_tokens: 1024,
+      temperature: 0.3,
+    }),
+    signal: AbortSignal.timeout(30_000),
   });
-  if (!resp.ok) throw new Error(`API ${resp.status}`);
+
+  if (!resp.ok) throw new Error(`Fast API ${resp.status}`);
   const data = (await resp.json()) as any;
   return data.choices?.[0]?.message?.content ?? "";
 }
