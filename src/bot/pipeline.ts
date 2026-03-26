@@ -10,6 +10,8 @@ import { heartbeat, updatePerformance } from "../modules/agents/agent.service.js
 import { createTask, assignTask, startTask, completeTask, failTask } from "../modules/tasks/task.service.js";
 import { storeKnowledge } from "../modules/knowledge/knowledge.service.js";
 import { recordDecision } from "../modules/decisions/decision.service.js";
+import { botLog } from "../modules/logs/bot-logger.js";
+import * as log from "./middleware/logger.js";
 
 import { feedbackMiddleware } from "./middleware/01-feedback.js";
 import { knowledgeMiddleware } from "./middleware/02-knowledge.js";
@@ -131,20 +133,13 @@ export async function processWithCommander(input: {
   };
 
   try {
-    // ── Log user message ──────────────────────────────────
-    const { botLog } = await import("../modules/logs/bot-logger.js");
+    log.logStart(ctx);
     await botLog({ tenantId: input.tenantId, tenantName: input.tenantName, userId: input.userId, userName: input.userName, type: "user_message", content: input.userMessage });
 
     // ── Run middleware pipeline ─────────────────────────────
     for (const mw of middlewares) {
-      const mwName = mw.name || "unknown";
-      const mwStart = Date.now();
       await mw(ctx);
-      console.error(`[Pipeline] ✓ ${mwName} (${Date.now() - mwStart}ms)`);
-      if (ctx.done) {
-        console.error(`[Pipeline] Done early at ${mwName}`);
-        break;
-      }
+      if (ctx.done) break;
     }
 
     // ── Complete task + update performance ──────────────────
@@ -164,16 +159,17 @@ export async function processWithCommander(input: {
     });
 
     const elapsed = Date.now() - startTime;
-    console.error(`[Pipeline] ─── END (${elapsed}ms, ${ctx.toolCalls.length} tools) ────────────`);
 
-    // ── Log bot response + tools ──────────────────────────
-    const { botLog: botLog2 } = await import("../modules/logs/bot-logger.js");
-    // Log each tool call
+    // ── Structured end log ────────────────────────────────
+    log.logResponse(ctx.text);
+    log.logEnd(elapsed, ctx.toolCalls.length);
+
+    // ── Persistent logs to DB ─────────────────────────────
+    const logBase = { tenantId: input.tenantId, tenantName: input.tenantName };
     for (const tc of ctx.toolCalls) {
-      await botLog2({ tenantId: input.tenantId, tenantName: input.tenantName, type: "tool_call", content: `${tc.tool}(${JSON.stringify(tc.args).substring(0, 200)})`, metadata: { tool: tc.tool, args: tc.args, result: JSON.stringify(tc.result).substring(0, 500) } });
+      await botLog({ ...logBase, type: "tool_call", content: `${tc.tool}(${JSON.stringify(tc.args).substring(0, 200)})`, metadata: { tool: tc.tool, result: JSON.stringify(tc.result).substring(0, 500) } });
     }
-    // Log bot response
-    await botLog2({ tenantId: input.tenantId, tenantName: input.tenantName, userId: input.userId, userName: input.userName, type: "bot_response", content: ctx.text, metadata: { elapsed, toolCount: ctx.toolCalls.length, engine: ctx.engine } });
+    await botLog({ ...logBase, userId: input.userId, userName: input.userName, type: "bot_response", content: ctx.text, metadata: { elapsed, toolCount: ctx.toolCalls.length, engine: ctx.engine } });
 
     return { text: ctx.text, files: ctx.files, personaMessages: ctx.personaMessages };
 

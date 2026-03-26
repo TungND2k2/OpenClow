@@ -10,6 +10,7 @@ import { invalidateCache } from "../../modules/cache/resource-cache.js";
 import { manageContext } from "../../modules/conversations/token-manager.js";
 import { emitEvent } from "../../modules/events/event-bus.js";
 import { handleEvent } from "../../modules/events/event-handler.js";
+import { logEngine, logToolCall, logLLMDone, logContext, logHistory } from "./logger.js";
 import type { PipelineContext } from "./types.js";
 
 const MUTATING_TOOLS = new Set([
@@ -21,6 +22,7 @@ const MUTATING_TOOLS = new Set([
 ]);
 
 export async function executeMiddleware(ctx: PipelineContext): Promise<void> {
+  const executeStart = Date.now();
   const commander = getCommander();
   if (!commander) {
     ctx.text = "⚠️ Commander agent chưa khởi tạo. Restart hệ thống.";
@@ -40,10 +42,9 @@ export async function executeMiddleware(ctx: PipelineContext): Promise<void> {
   const effectivePrompt = managed.systemPrompt;
   const effectiveHistory = managed.history;
 
-  console.error(`[Execute] Engine: ${ctx.engine}`);
-  console.error(`[Execute] Personas: ${ctx.personas.length} (${ctx.personas.map(p => p.name).join(", ")})`);
-  console.error(`[Execute] History: ${ctx.conversationHistory.length} → ${effectiveHistory.length} messages${managed.truncated ? " (truncated)" : ""}`);
-  console.error(`[Execute] Tokens: ~${managed.totalTokens} (prompt: ${effectivePrompt.length} chars)`);
+  logEngine(ctx.engine as string, ctx.personas.map(p => p.name));
+  logContext(ctx);
+  logHistory(ctx, effectiveHistory.length, ctx.conversationHistory.length, !!managed.truncated);
 
   // Dynamic tool progress
   let toolCallCount = 0;
@@ -59,33 +60,30 @@ export async function executeMiddleware(ctx: PipelineContext): Promise<void> {
     systemPrompt: effectivePrompt,
     executeTool: async (tool, args) => {
       toolCallCount++;
-      const argsPreview = tool === "ssh_exec" ? (args.command as string ?? "") : "";
-      await ctx.onProgress?.(`🔄 [${toolCallCount}] ${tool}${argsPreview ? `: ${argsPreview.substring(0, 50)}` : ""}...`);
+      const toolStart = Date.now();
+      await ctx.onProgress?.(`🔄 [${toolCallCount}] ${tool}...`);
 
-      // Tool execution with retry + error handling (pattern from OpenClaw)
+      // Tool execution with retry on failure
       let toolResult: any;
       try {
         toolResult = await executeTool(tool, args, ctx.tenantId, toolCtx);
       } catch (e: any) {
-        console.error(`[Execute] Tool ${tool} failed: ${e.message} — retrying once`);
         try {
           toolResult = await executeTool(tool, args, ctx.tenantId, toolCtx);
         } catch (e2: any) {
-          console.error(`[Execute] Tool ${tool} retry failed: ${e2.message}`);
-          toolResult = { error: `Tool ${tool} lỗi: ${e2.message}. Hãy báo user lỗi cụ thể, KHÔNG bịa kết quả.` };
+          toolResult = { error: `Tool ${tool} lỗi: ${e2.message}. KHÔNG bịa kết quả.` };
         }
       }
 
-      // Sanitize: truncate large results (pattern from OpenClaw)
+      // Sanitize large results
       const resultStr = JSON.stringify(toolResult);
       if (resultStr.length > 3000) {
-        console.error(`[Execute] Tool ${tool} result truncated: ${resultStr.length} → 3000 chars`);
         toolResult = { ...toolResult, _truncated: true, _originalLength: resultStr.length };
       }
+      logToolCall(toolCallCount, tool, args, toolResult, Date.now() - toolStart);
+
       if (MUTATING_TOOLS.has(tool)) {
         invalidateCache(ctx.tenantId);
-        // Emit event for agent subscriptions (async, non-blocking)
-        console.error(`[Execute] Mutating tool "${tool}" → emitting event`);
         const event = {
           type: tool.startsWith("create_") ? "row.created" : tool.startsWith("update_") ? "row.updated" : tool === "delete_row" ? "row.deleted" : "data.changed",
           tenantId: ctx.tenantId,
@@ -179,5 +177,5 @@ export async function executeMiddleware(ctx: PipelineContext): Promise<void> {
   ctx.text = result.text;
   ctx.toolCalls = result.toolCalls.map(t => ({ tool: t.tool, args: (t as any).args, result: (t as any).result }));
 
-  console.error(`[Execute] Response: ${ctx.text.length} chars, ${ctx.toolCalls.length} tools: [${ctx.toolCalls.map(t => t.tool).join(", ")}]`);
+  logLLMDone(ctx.toolCalls.length, Date.now() - executeStart);
 }
