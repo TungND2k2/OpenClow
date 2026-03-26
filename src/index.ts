@@ -51,6 +51,10 @@ async function main() {
   // 6. Start Telegram bot (if configured)
   await startTelegramBot();
 
+  // 7. Start Dashboard API
+  const { startDashboardAPI } = await import("./api/dashboard.js");
+  startDashboardAPI(3102);
+
   // 7. Start stdio transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
