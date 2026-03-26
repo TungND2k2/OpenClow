@@ -1,49 +1,37 @@
 /**
- * Pipeline — middleware-based orchestrator for the Commander agent.
+ * Pipeline — simplified with SDK sessions.
  *
- * Replaces the monolithic processWithCommander() with a clean pipeline:
- *   feedback → knowledge → context → route → execute → learn
+ * 3 steps:
+ *   1. Resume/Create SDK session (inject DB summary if session lost)
+ *   2. SDK query (native tools, context, agent loop)
+ *   3. Save logs + summary to DB (persistent backup)
  */
 
 import { getCommander } from "../modules/agents/agent-pool.js";
 import { heartbeat, updatePerformance } from "../modules/agents/agent.service.js";
-import { createTask, assignTask, startTask, completeTask, failTask } from "../modules/tasks/task.service.js";
-import { storeKnowledge } from "../modules/knowledge/knowledge.service.js";
-import { recordDecision } from "../modules/decisions/decision.service.js";
+import { AgentRunner, type LLMEngine, getSDKSessionId } from "../modules/agents/agent-runner.js";
+import { executeTool } from "./tool-registry.js";
+import { invalidateCache } from "../modules/cache/resource-cache.js";
+import { getResourceSummary, buildResourceSummary, formatSummaryForPrompt } from "../modules/cache/resource-cache.js";
+import { buildCommanderPrompt } from "./prompt-builder.js";
 import { botLog } from "../modules/logs/bot-logger.js";
 import * as log from "./middleware/logger.js";
-
-import { feedbackMiddleware } from "./middleware/01-feedback.js";
-import { knowledgeMiddleware } from "./middleware/02-knowledge.js";
-import { contextMiddleware } from "./middleware/03-context.js";
-import { routeMiddleware } from "./middleware/04-route.js";
-import { executeMiddleware } from "./middleware/05-execute.js";
-import { learnMiddleware } from "./middleware/06-learn.js";
 import type { PipelineContext } from "./middleware/types.js";
 
-// Track last tools called per session — for feedback detection (shared across requests)
-const _lastToolsCalledBySession = new Map<string, string[]>();
-
-const middlewares = [
-  feedbackMiddleware,
-  knowledgeMiddleware,
-  contextMiddleware,
-  routeMiddleware,
-  executeMiddleware,
-  learnMiddleware,
-];
-
-export interface PersonaMsg {
-  emoji: string;
-  name: string;
-  content: string;
-}
-
+export interface PersonaMsg { emoji: string; name: string; content: string }
 export interface CommanderResponse {
   text: string;
   files: { url: string; fileName: string; mimeType: string }[];
   personaMessages?: PersonaMsg[];
 }
+
+const MUTATING_TOOLS = new Set([
+  "add_row", "update_row", "delete_row", "create_collection",
+  "create_form", "create_workflow", "create_rule", "set_user_role",
+  "save_knowledge", "update_instructions", "create_bot", "stop_bot",
+  "create_agent_template", "spawn_agent", "kill_agent", "create_cron",
+  "ssh_exec", "start_form", "update_form_field",
+]);
 
 export async function processWithCommander(input: {
   userMessage: string;
@@ -59,134 +47,126 @@ export async function processWithCommander(input: {
   sessionId?: string;
 }): Promise<CommanderResponse> {
   const startTime = Date.now();
+  const _files: CommanderResponse["files"] = [];
 
-  // ── Get Commander agent ──────────────────────────────────
+  // ── Get Commander ────────────────────────────────────
   const commander = getCommander();
-  if (!commander) {
-    return { text: "⚠️ Commander agent chưa khởi tạo. Restart hệ thống.", files: [] };
-  }
+  if (!commander) return { text: "⚠️ Commander chưa khởi tạo.", files: [] };
+  await heartbeat(commander.agent.id);
 
-  const commanderAgentId = commander.agent.id;
-  await heartbeat(commanderAgentId);
-
-  // ── Create Task (valid FK to Commander) ──────────────────
-  let taskId: string | null = null;
-  try {
-    const task = await createTask({
-      title: `Chat: ${input.userMessage.substring(0, 50)}`,
-      description: input.userMessage,
-      tags: ["chat", "telegram"],
-      createdByAgentId: commanderAgentId,
-    });
-    await assignTask(task.id, commanderAgentId, commanderAgentId);
-    await startTask(task.id, commanderAgentId);
-    taskId = task.id;
-  } catch (taskErr: any) {
-  }
-
-  // ── Build pipeline context ───────────────────────────────
+  // ── Structured log ───────────────────────────────────
   const ctx: PipelineContext = {
-    // Input
-    userMessage: input.userMessage,
-    userName: input.userName,
-    userId: input.userId,
-    userRole: input.userRole,
-    tenantId: input.tenantId,
-    tenantName: input.tenantName,
-    conversationHistory: input.conversationHistory,
-    aiConfig: input.aiConfig,
-    sessionId: input.sessionId ?? "",
-    onProgress: input.onProgress,
+    userMessage: input.userMessage, userName: input.userName, userId: input.userId,
+    userRole: input.userRole, tenantId: input.tenantId, tenantName: input.tenantName,
+    conversationHistory: input.conversationHistory, aiConfig: input.aiConfig,
+    sessionId: input.sessionId ?? "", onProgress: input.onProgress,
     onPersonaMessage: input.onPersonaMessage,
-
-    // Built during pipeline
-    keywords: [],
-    knowledgeContext: "",
-    knowledgeEntries: [],
-    fileContext: "",
-    formContext: "",
-    onboardingContext: "",
-    systemPrompt: "",
-    engine: "",
-    personas: [],
-
-    // Per-request context (replaces globals)
-    currentUser: { id: input.userId, name: input.userName, role: input.userRole },
-    lastToolsCalledBySession: _lastToolsCalledBySession,
-    commanderAgentId,
-    taskId,
-
-    // Output
-    text: "",
-    files: [],
-    toolCalls: [],
-    personaMessages: undefined,
-    done: false,
+    keywords: [], knowledgeContext: "", knowledgeEntries: [], fileContext: "",
+    formContext: "", onboardingContext: "", systemPrompt: "", engine: "",
+    personas: [], currentUser: { id: input.userId, name: input.userName, role: input.userRole },
+    lastToolsCalledBySession: new Map(), commanderAgentId: commander.agent.id,
+    taskId: null, text: "", files: [], toolCalls: [], done: false,
   };
 
+  log.logStart(ctx);
+  await botLog({ tenantId: input.tenantId, tenantName: input.tenantName, userId: input.userId, userName: input.userName, type: "user_message", content: input.userMessage });
+
   try {
-    log.logStart(ctx);
-    await botLog({ tenantId: input.tenantId, tenantName: input.tenantName, userId: input.userId, userName: input.userName, type: "user_message", content: input.userMessage });
+    // ── Step 1: Build context ────────────────────────────
+    let summary = getResourceSummary(input.tenantId);
+    if (!summary) summary = await buildResourceSummary(input.tenantId);
+    const resourceContext = formatSummaryForPrompt(summary);
 
-    // ── Run middleware pipeline ─────────────────────────────
-    for (const mw of middlewares) {
-      await mw(ctx);
-      if (ctx.done) break;
-    }
+    const systemPrompt = buildCommanderPrompt(input.tenantName, input.userName, input.userRole, input.aiConfig)
+      + (resourceContext ? `\n\nHỆ THỐNG CÓ:\n${resourceContext}` : "");
 
-    // ── Complete task + update performance ──────────────────
-    if (taskId) {
+    // Get DB summary for session recovery
+    let dbSummary = "";
+    const existingSDKSession = getSDKSessionId(input.tenantId, input.userId);
+    if (!existingSDKSession) {
+      // No SDK session — load summary from DB conversation
       try {
-        await completeTask(taskId, commanderAgentId, ctx.text.substring(0, 200));
+        const { getDb } = await import("../db/connection.js");
+        const { conversationSessions } = await import("../db/schema.js");
+        const { eq, and } = await import("drizzle-orm");
+        const db = getDb();
+        const session = (await db.select().from(conversationSessions).where(
+          and(eq(conversationSessions.tenantId, input.tenantId), eq(conversationSessions.channelUserId, input.userId))
+        ).limit(1))[0];
+        const state = typeof session?.state === "string" ? JSON.parse(session.state) : session?.state;
+        dbSummary = state?.summary ?? "";
       } catch {}
     }
-    await updatePerformance(commanderAgentId, true);
 
-    // ── Audit ──────────────────────────────────────────────
-    await recordDecision({
-      agentId: commanderAgentId,
-      decisionType: "assign",
-      taskId: taskId ?? undefined,
-      reasoning: `Chat: "${input.userMessage.substring(0, 60)}". Tools: ${ctx.toolCalls.map(t => t.tool).join(", ") || "none"}. Knowledge: ${ctx.knowledgeEntries.length}.`,
+    // ── Engine routing ────────────────────────────────────
+    const GREETING = /^(chào|hi|hello|hey|xin chào|ok|ừ|uh|cảm ơn|thanks|bye|👋)[\s!.?]*$/i;
+    const isGreeting = input.userMessage.trim().length < 20 && GREETING.test(input.userMessage.trim());
+    const engine: LLMEngine = isGreeting ? "fast-api" : "claude-sdk";
+
+    log.logEngine(engine, []);
+    log.logContext(ctx);
+    log.logHistory(ctx, input.conversationHistory.length, input.conversationHistory.length, !!dbSummary);
+
+    // ── Step 2: SDK query ─────────────────────────────────
+    await input.onProgress?.("🤖 Đang suy nghĩ...");
+
+    const toolCtx = { sessionId: input.sessionId ?? "", currentUser: ctx.currentUser };
+    let toolCallCount = 0;
+
+    const runner = new AgentRunner({
+      agent: commander.agent,
+      engine,
+      tools: [],
+      systemPrompt,
+      tenantId: input.tenantId,
+      userId: input.userId,
+      dbSummary,
+      executeTool: async (tool, args) => {
+        toolCallCount++;
+        const toolStart = Date.now();
+        await input.onProgress?.(`🔄 [${toolCallCount}] ${tool}...`);
+
+        let toolResult: any;
+        try {
+          toolResult = await executeTool(tool, args, input.tenantId, toolCtx);
+        } catch (e: any) {
+          try { toolResult = await executeTool(tool, args, input.tenantId, toolCtx); }
+          catch (e2: any) { toolResult = { error: `Tool ${tool} lỗi: ${e2.message}` }; }
+        }
+
+        // Truncate large results
+        if (JSON.stringify(toolResult).length > 3000) {
+          toolResult = { ...toolResult, _truncated: true };
+        }
+
+        log.logToolCall(toolCallCount, tool, args, toolResult, Date.now() - toolStart);
+        ctx.toolCalls.push({ tool, args, result: toolResult });
+
+        if (MUTATING_TOOLS.has(tool)) invalidateCache(input.tenantId);
+        return toolResult;
+      },
     });
 
-    const elapsed = Date.now() - startTime;
+    const result = await runner.think(input.userMessage, input.conversationHistory);
+    ctx.text = result.text;
 
-    // ── Structured end log ────────────────────────────────
+    // ── Step 3: Log + persist ─────────────────────────────
+    await updatePerformance(commander.agent.id, true);
     log.logResponse(ctx.text);
-    log.logEnd(elapsed, ctx.toolCalls.length);
+    log.logEnd(Date.now() - startTime, ctx.toolCalls.length);
 
-    // ── Persistent logs to DB ─────────────────────────────
+    // Persistent logs
     const logBase = { tenantId: input.tenantId, tenantName: input.tenantName };
     for (const tc of ctx.toolCalls) {
-      await botLog({ ...logBase, type: "tool_call", content: `${tc.tool}(${JSON.stringify(tc.args).substring(0, 200)})`, metadata: { tool: tc.tool, result: JSON.stringify(tc.result).substring(0, 500) } });
+      await botLog({ ...logBase, type: "tool_call", content: `${tc.tool}(${JSON.stringify(tc.args).substring(0, 200)})`, metadata: { tool: tc.tool } });
     }
-    await botLog({ ...logBase, userId: input.userId, userName: input.userName, type: "bot_response", content: ctx.text, metadata: { elapsed, toolCount: ctx.toolCalls.length, engine: ctx.engine } });
+    await botLog({ ...logBase, userId: input.userId, userName: input.userName, type: "bot_response", content: ctx.text, metadata: { elapsed: Date.now() - startTime, toolCount: ctx.toolCalls.length, engine, sdkSessionId: result.sdkSessionId } });
 
-    return { text: ctx.text, files: ctx.files, personaMessages: ctx.personaMessages };
+    return { text: ctx.text, files: _files };
 
   } catch (e: any) {
-    // ── Error handling ──────────────────────────────────────
-    if (taskId) {
-      try { await failTask(taskId, commanderAgentId, e.message); } catch {}
-    }
-    await updatePerformance(commanderAgentId, false);
-
-    // Save anti-pattern rule (what NOT to do)
-    try {
-      const intentKeywords = ctx.keywords.slice(0, 3).join(" ");
-      await storeKnowledge({
-        type: "anti_pattern",
-        title: `Anti-pattern: ${intentKeywords}`,
-        content: `Khi user hỏi "${intentKeywords}" → TRÁNH: ${e.message.substring(0, 100)}. Cần kiểm tra lại cách gọi tool.`,
-        domain: "general",
-        tags: ctx.keywords.slice(0, 5),
-        sourceAgentId: commanderAgentId,
-        outcome: "failure",
-      });
-    } catch {}
-
-    console.error(`[Pipeline] ✗ Error (${Date.now() - startTime}ms): ${e.message}`);
-    return { text: `⚠️ Lỗi: ${e.message}`, files: ctx.files };
+    await updatePerformance(commander.agent.id, false);
+    log.logError(e.message);
+    return { text: `⚠️ Lỗi: ${e.message}`, files: _files };
   }
 }

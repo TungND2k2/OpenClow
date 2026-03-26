@@ -1,9 +1,13 @@
 /**
- * AgentRunner — wrapper around LLM "brain" for each agent.
+ * AgentRunner — Claude Agent SDK with persistent sessions.
  *
- * Engines:
- *   - claude-sdk  → Claude Agent SDK (native tools, Max subscription)
- *   - fast-api    → OpenAI-compatible API (x-or.cloud, cheap + fast)
+ * SDK sessions = context in memory (fast, no DB query per message)
+ * PostgreSQL = backup (summary, logs, data)
+ *
+ * Flow:
+ *   1. Resume SDK session (if exists) or create new (inject summary from DB)
+ *   2. SDK query (native tools, native context management)
+ *   3. Save summary to DB periodically (for backup on restart)
  */
 
 import type { InferSelectModel } from "drizzle-orm";
@@ -27,15 +31,36 @@ export interface ToolResult {
 export interface ThinkResult {
   text: string;
   toolCalls: ToolResult[];
+  sdkSessionId?: string;
 }
+
+// ── SDK Session Map — per user per tenant ──────────────
+const sessionMap = new Map<string, string>(); // key: tenantId:userId → SDK sessionId
+
+export function getSessionKey(tenantId: string, userId: string): string {
+  return `${tenantId}:${userId}`;
+}
+
+export function getSDKSessionId(tenantId: string, userId: string): string | undefined {
+  return sessionMap.get(getSessionKey(tenantId, userId));
+}
+
+export function setSDKSessionId(tenantId: string, userId: string, sessionId: string): void {
+  sessionMap.set(getSessionKey(tenantId, userId), sessionId);
+}
+
+// ── AgentRunner ────────────────────────────────────────
 
 export interface AgentRunnerConfig {
   agent: AgentRecord;
   engine: LLMEngine;
-  tools: { name: string; description: string; parameters: Record<string, unknown> }[];
+  tools: ToolDefinition[];
   systemPrompt: string;
   executeTool: (tool: string, args: Record<string, unknown>) => Promise<unknown>;
   maxToolLoops?: number;
+  tenantId?: string;
+  userId?: string;
+  dbSummary?: string; // inject from PostgreSQL when SDK session lost
 }
 
 export class AgentRunner {
@@ -44,6 +69,9 @@ export class AgentRunner {
   private systemPrompt: string;
   private executeTool: (tool: string, args: Record<string, unknown>) => Promise<unknown>;
   private maxToolLoops: number;
+  private tenantId: string;
+  private userId: string;
+  private dbSummary: string;
 
   constructor(config: AgentRunnerConfig) {
     this.agent = config.agent;
@@ -51,19 +79,20 @@ export class AgentRunner {
     this.systemPrompt = config.systemPrompt;
     this.executeTool = config.executeTool;
     this.maxToolLoops = config.maxToolLoops ?? 10;
+    this.tenantId = config.tenantId ?? "";
+    this.userId = config.userId ?? "";
+    this.dbSummary = config.dbSummary ?? "";
   }
 
   async think(
     userMessage: string,
     conversationHistory: { role: string; content: string }[] = [],
   ): Promise<ThinkResult> {
-    const prefix = `[Agent:${this.agent.name}]`;
-
     if (this.engine === "claude-sdk" || this.engine === "claude-cli") {
       try {
         return await this.callSDK(userMessage, conversationHistory);
       } catch (err: any) {
-        console.error(`${prefix} SDK failed: ${err.message.substring(0, 100)} → fallback fast-api`);
+        console.error(`[Agent:${this.agent.name}] SDK failed: ${err.message.substring(0, 100)} → fallback fast-api`);
         return this.callFastAPIWithTools(userMessage, conversationHistory);
       }
     }
@@ -71,7 +100,7 @@ export class AgentRunner {
   }
 
   /**
-   * Claude Agent SDK — native tool execution via Max subscription.
+   * Claude Agent SDK with sessions.
    */
   private async callSDK(
     userMessage: string,
@@ -79,12 +108,27 @@ export class AgentRunner {
   ): Promise<ThinkResult> {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     const prefix = `[Agent:${this.agent.name}]`;
-
-    const prompt = this.buildPromptWithHistory(userMessage, history);
     const allToolResults: ToolResult[] = [];
     let finalText = "";
 
+    // Check for existing SDK session
+    const existingSessionId = getSDKSessionId(this.tenantId, this.userId);
+    const isResume = !!existingSessionId;
+
+    // Build prompt
+    let prompt = userMessage;
+    if (!isResume && this.dbSummary) {
+      // New session — inject DB summary as context
+      prompt = `[Context từ phiên trước]: ${this.dbSummary}\n\n---\n\nUser: ${userMessage}`;
+      console.error(`${prefix} SDK new session (injected DB summary: ${this.dbSummary.length} chars)`);
+    } else if (isResume) {
+      console.error(`${prefix} SDK resume session ${existingSessionId!.substring(0, 8)}`);
+    } else {
+      console.error(`${prefix} SDK new session (no prior context)`);
+    }
+
     console.error(`${prefix} SDK calling...`);
+    let newSessionId: string | undefined;
 
     for await (const msg of query({
       prompt,
@@ -92,29 +136,36 @@ export class AgentRunner {
         systemPrompt: this.systemPrompt,
         allowedTools: [],
         maxTurns: this.maxToolLoops,
+        ...(isResume ? { resume: existingSessionId } : {}),
       },
     })) {
-      // Handle different message types
-      if (msg.type === "assistant" && msg.message) {
-        // Text response
-        for (const block of msg.message.content ?? []) {
-          if (typeof block === "string") {
-            finalText += block;
-          } else if (block.type === "text") {
-            finalText += block.text;
-          }
+      // Capture session ID
+      if (msg.type === "system" && (msg as any).subtype === "init") {
+        newSessionId = (msg as any).session_id;
+      }
+
+      // Text response
+      if (msg.type === "assistant" && (msg as any).message) {
+        for (const block of (msg as any).message.content ?? []) {
+          if (typeof block === "string") finalText += block;
+          else if (block.type === "text") finalText += block.text;
         }
       }
 
+      // Result
       if (msg.type === "result" && "result" in msg) {
         finalText = (msg as any).result ?? finalText;
       }
     }
 
-    // Parse tool_calls from text (SDK may still output them as text)
+    // Save session ID for next message
+    if (newSessionId) {
+      setSDKSessionId(this.tenantId, this.userId, newSessionId);
+    }
+
+    // Parse tool_calls from text (SDK may output them in text)
     const toolCalls = this.parseToolCalls(finalText);
     if (toolCalls.length > 0) {
-      // Execute tools manually
       for (const tc of toolCalls) {
         try {
           const result = await this.executeTool(tc.tool, tc.args);
@@ -124,33 +175,38 @@ export class AgentRunner {
         }
       }
 
-      // Call SDK again with tool results for final response
+      // Follow-up call with tool results
       const toolResultText = allToolResults
         .map(r => `[Tool: ${r.tool}] Result:\n${JSON.stringify(r.result, null, 2).substring(0, 1000)}`)
         .join("\n\n");
 
       let followUp = "";
       for await (const msg of query({
-        prompt: toolResultText + "\n\nDựa trên kết quả tools, trả lời user ngắn gọn.",
+        prompt: toolResultText + "\n\nDựa trên kết quả tools, trả lời user.",
         options: {
           systemPrompt: this.systemPrompt,
           allowedTools: [],
           maxTurns: 1,
+          ...(newSessionId ? { resume: newSessionId } : {}),
         },
       })) {
         if (msg.type === "result" && "result" in msg) followUp = (msg as any).result ?? "";
       }
 
       console.error(`${prefix} SDK done: ${allToolResults.length} tools`);
-      return { text: followUp || finalText.replace(/```tool_calls[\s\S]*?```/g, "").trim(), toolCalls: allToolResults };
+      return {
+        text: followUp || finalText.replace(/```tool_calls[\s\S]*?```/g, "").trim(),
+        toolCalls: allToolResults,
+        sdkSessionId: newSessionId,
+      };
     }
 
     console.error(`${prefix} SDK done: 0 tools`);
-    return { text: finalText.trim(), toolCalls: [] };
+    return { text: finalText.trim(), toolCalls: [], sdkSessionId: newSessionId };
   }
 
   /**
-   * Fast API with tool parsing — fallback.
+   * Fast API — fallback.
    */
   private async callFastAPIWithTools(
     userMessage: string,
@@ -161,12 +217,11 @@ export class AgentRunner {
     let currentMessage = userMessage;
 
     for (let loop = 0; loop < this.maxToolLoops; loop++) {
-      const response = await this.callFastAPI(currentMessage, currentHistory);
+      const response = await callFastAPI(currentMessage, this.systemPrompt, currentHistory);
       const toolCalls = this.parseToolCalls(response);
 
       if (toolCalls.length === 0) {
-        const cleanText = response.replace(/```tool_calls[\s\S]*?```/g, "").trim();
-        return { text: cleanText, toolCalls: allToolResults };
+        return { text: response.replace(/```tool_calls[\s\S]*?```/g, "").trim(), toolCalls: allToolResults };
       }
 
       for (const tc of toolCalls) {
@@ -193,65 +248,14 @@ export class AgentRunner {
     return { text: "Đã đạt giới hạn xử lý.", toolCalls: allToolResults };
   }
 
-  private async callFastAPI(
-    userMessage: string,
-    history: { role: string; content: string }[],
-  ): Promise<string> {
-    const { getConfig } = await import("../../config.js");
-    const config = getConfig();
-
-    const messages = [
-      { role: "system", content: this.systemPrompt },
-      ...history.map(h => ({ role: h.role, content: h.content })),
-      { role: "user", content: userMessage },
-    ];
-
-    const resp = await fetch(`${config.WORKER_API_BASE}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.WORKER_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: config.WORKER_MODEL,
-        messages,
-        max_tokens: 2048,
-        temperature: 0.3,
-      }),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!resp.ok) throw new Error(`API ${resp.status}`);
-    const data = (await resp.json()) as any;
-    return data.choices?.[0]?.message?.content ?? "";
-  }
-
-  private buildPromptWithHistory(
-    userMessage: string,
-    history: { role: string; content: string }[],
-  ): string {
-    if (history.length === 0) return userMessage;
-    const historyText = history
-      .map(h => `${h.role === "user" ? "User" : "Assistant"}: ${h.content}`)
-      .join("\n\n");
-    return `${historyText}\n\nUser: ${userMessage}`;
-  }
-
   private parseToolCalls(text: string): { tool: string; args: Record<string, unknown> }[] {
-    const patterns = [
-      /```tool_calls\s*\n?([\s\S]*?)```/,
-      /```json\s*\n?(\[[\s\S]*?\])\s*```/,
-    ];
+    const patterns = [/```tool_calls\s*\n?([\s\S]*?)```/, /```json\s*\n?(\[[\s\S]*?\])\s*```/];
     for (const pattern of patterns) {
       const match = text.match(pattern);
       if (!match) continue;
       try {
         const parsed = JSON.parse(match[1].trim());
-        const arr = Array.isArray(parsed) ? parsed : [parsed];
-        return arr.filter((t: any) => t.tool).map((t: any) => ({
-          tool: t.tool,
-          args: t.args ?? {},
-        }));
+        return (Array.isArray(parsed) ? parsed : [parsed]).filter((t: any) => t.tool).map((t: any) => ({ tool: t.tool, args: t.args ?? {} }));
       } catch { continue; }
     }
     return [];
@@ -259,7 +263,7 @@ export class AgentRunner {
 }
 
 /**
- * Standalone fast-api call — used by compactor + feedback detection.
+ * Standalone fast-api call.
  */
 export async function callFastAPI(
   userMessage: string,
@@ -268,28 +272,17 @@ export async function callFastAPI(
 ): Promise<string> {
   const { getConfig } = await import("../../config.js");
   const config = getConfig();
-
   const messages = [
     { role: "system", content: systemPrompt },
     ...history.map(h => ({ role: h.role, content: h.content })),
     { role: "user", content: userMessage },
   ];
-
   const resp = await fetch(`${config.WORKER_API_BASE}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.WORKER_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: config.WORKER_MODEL,
-      messages,
-      max_tokens: 1024,
-      temperature: 0.3,
-    }),
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.WORKER_API_KEY}` },
+    body: JSON.stringify({ model: config.WORKER_MODEL, messages, max_tokens: 2048, temperature: 0.3 }),
     signal: AbortSignal.timeout(30_000),
   });
-
   if (!resp.ok) throw new Error(`Fast API ${resp.status}`);
   const data = (await resp.json()) as any;
   return data.choices?.[0]?.message?.content ?? "";
