@@ -14,10 +14,15 @@ import {
 } from "../db/schema.js";
 import { eq, sql, desc } from "drizzle-orm";
 
-export function startDashboardAPI(port = 3102) {
+export async function startDashboardAPI(port = 3102) {
   const app = express();
   app.use(cors());
   app.use(express.json());
+
+  // Serve web dashboard static files
+  const path = await import("path");
+  const webDist = path.resolve(process.cwd(), "web/dist");
+  app.use(express.static(webDist));
 
   const db = getDb();
 
@@ -153,6 +158,11 @@ export function startDashboardAPI(port = 3102) {
   app.get("/api/bots/:tenantId/crons", async (req, res) => {
     const rows = await db.execute(sql`SELECT * FROM scheduled_tasks WHERE tenant_id = ${req.params.tenantId}`);
     res.json(rows);
+  });
+
+  // SPA fallback
+  app.get("*", (_req, res) => {
+    res.sendFile(path.resolve(webDist, "index.html"));
   });
 
   app.listen(port, "0.0.0.0", () => {
