@@ -162,7 +162,9 @@ export async function startDashboardAPI(port = 3102) {
 
   // SPA fallback
   app.get("*", (_req, res) => {
-    res.sendFile(path.resolve(webDist, "index.html"));
+    try {
+      res.sendFile(path.resolve(webDist, "index.html"));
+    } catch { res.status(404).send("Not found"); }
   });
 
   app.listen(port, "0.0.0.0", () => {
