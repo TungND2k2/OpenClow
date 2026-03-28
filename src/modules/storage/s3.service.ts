@@ -72,7 +72,7 @@ export async function uploadFile(input: {
     Metadata: {
       "tenant-id": input.tenantId,
       "uploaded-by": input.uploadedBy,
-      "original-name": input.fileName,
+      "original-name": encodeURIComponent(input.fileName),
     },
   }));
 
