@@ -77,8 +77,13 @@ export async function processWithCommander(input: {
     if (!summary) summary = await buildResourceSummary(input.tenantId);
     const resourceContext = formatSummaryForPrompt(summary);
 
+    // Inject user's latest file context
+    const { buildFileContextForUser } = await import("../modules/context/user-file-context.js");
+    const fileContext = buildFileContextForUser(input.tenantId, input.userId);
+
     const systemPrompt = buildCommanderPrompt(input.tenantName, input.userName, input.userRole, input.aiConfig)
-      + (resourceContext ? `\n\nHỆ THỐNG CÓ:\n${resourceContext}` : "");
+      + (resourceContext ? `\n\nHỆ THỐNG CÓ:\n${resourceContext}` : "")
+      + fileContext;
 
     // Get DB summary for session recovery
     let dbSummary = "";

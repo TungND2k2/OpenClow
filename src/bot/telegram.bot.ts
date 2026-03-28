@@ -772,10 +772,43 @@ async function handleFileUpload(
       ? `${(fileSize / 1024 / 1024).toFixed(1)}MB`
       : `${(fileSize / 1024).toFixed(1)}KB`;
 
+    // ── Auto-analyze file ──────────────────────────────
+    const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(fileName) || mimeType.startsWith("image/");
+    let analysis = "";
+    try {
+      const { executeTool } = await import("./tool-registry.js");
+      const toolCtx = { sessionId: "", currentUser: { id: userId, name: userName, role: "user" } };
+      if (isImage) {
+        const r = await executeTool("analyze_image", { file_id: result.id }, tenantId, toolCtx);
+        analysis = typeof r === "string" ? r : JSON.stringify(r).substring(0, 2000);
+      } else {
+        const r = await executeTool("read_file_content", { file_id: result.id }, tenantId, toolCtx);
+        analysis = typeof r === "string" ? r : JSON.stringify(r).substring(0, 2000);
+      }
+      console.error(`[Bot] Auto-analyzed ${fileName}: ${analysis.length} chars`);
+    } catch (e: any) {
+      console.error(`[Bot] Auto-analyze failed: ${e.message}`);
+      analysis = `File ${fileName} uploaded but could not be analyzed.`;
+    }
+
+    // Store in user file context map
+    const { setUserFile } = await import("../modules/context/user-file-context.js");
+    setUserFile(tenantId, userId, {
+      fileId: result.id,
+      fileName,
+      mimeType,
+      isImage,
+      analysis,
+      uploadedAt: Date.now(),
+    });
+
+    // Show analysis preview to user
+    const preview = analysis.substring(0, 300).replace(/</g, "&lt;");
     await sendTelegramMessage(chatId,
-      `✅ <b>File đã lưu</b>\n` +
+      `✅ <b>File đã lưu + phân tích</b>\n` +
       `📎 ${fileName} (${sizeStr})\n` +
-      `🔗 ID: <code>${result.id}</code>` +
+      `🔗 ID: <code>${result.id}</code>\n` +
+      `📊 <i>${preview}${analysis.length > 300 ? "..." : ""}</i>` +
       (caption ? `\n📝 ${caption}` : ""),
       tk,
     );
