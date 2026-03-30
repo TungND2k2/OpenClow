@@ -79,9 +79,13 @@ registerTool("create_workflow", async (args, tenantId) => {
   const db = getDb();
   const now = nowMs();
   const id = newId();
-  const stages = ((args.stages as any[]) ?? []).map((s: any, i: number) => ({
-    id: s.id ?? `step_${i + 1}`, name: s.name, type: s.type ?? "form",
-    next_stage_id: s.next_stage_id ?? (i < (args.stages as any[]).length - 1 ? (args.stages as any[])[i + 1]?.id ?? `step_${i + 2}` : undefined),
+  const stagesInput = (args.stages as any[]) ?? [];
+  const stages = stagesInput.map((s: any, i: number) => ({
+    ...s, // preserve all fields the LLM provides (description, form_id, assignee, checklist, etc.)
+    id: s.id ?? `step_${i + 1}`,
+    name: s.name,
+    type: s.type ?? "form",
+    next_stage_id: s.next_stage_id ?? (i < stagesInput.length - 1 ? stagesInput[i + 1]?.id ?? `step_${i + 2}` : undefined),
   }));
   await db.insert(workflowTemplates).values({
     id, tenantId, name: args.name as string, description: (args.description as string) ?? null,
@@ -114,6 +118,69 @@ registerTool("create_rule", async (args, tenantId) => {
     priority: (args.priority as number) ?? 0, status: "active", createdAt: now, updatedAt: now,
   });
   return { id, name: args.name };
+});
+
+registerTool("update_workflow", async (args, tenantId) => {
+  const db = getDb();
+  const now = nowMs();
+  // Lookup by id or name
+  let wf: any;
+  if (args.workflow_id) {
+    wf = (await db.select().from(workflowTemplates).where(
+      and(eq(workflowTemplates.id, args.workflow_id as string), eq(workflowTemplates.tenantId, tenantId))
+    ).limit(1))[0];
+  } else if (args.name) {
+    wf = (await db.select().from(workflowTemplates).where(
+      and(eq(workflowTemplates.name, args.name as string), eq(workflowTemplates.tenantId, tenantId))
+    ).limit(1))[0];
+  }
+  if (!wf) return { error: `Workflow "${args.workflow_id ?? args.name}" không tìm thấy` };
+
+  const updates: Record<string, unknown> = { updatedAt: now };
+  if (args.description !== undefined) updates.description = args.description;
+  if (args.domain !== undefined) updates.domain = args.domain;
+  if (args.status !== undefined) updates.status = args.status;
+  if (args.stages) {
+    const stagesInput = args.stages as any[];
+    const stages = stagesInput.map((s: any, i: number) => ({
+      ...s,
+      id: s.id ?? `step_${i + 1}`,
+      name: s.name,
+      type: s.type ?? "form",
+      next_stage_id: s.next_stage_id ?? (i < stagesInput.length - 1 ? stagesInput[i + 1]?.id ?? `step_${i + 2}` : undefined),
+    }));
+    updates.stages = JSON.stringify(stages);
+    updates.version = (wf.version ?? 1) + 1;
+  }
+
+  await db.update(workflowTemplates).set(updates).where(eq(workflowTemplates.id, wf.id));
+  return { updated: true, id: wf.id, name: wf.name, version: updates.version ?? wf.version };
+});
+
+registerTool("update_form", async (args, tenantId) => {
+  const db = getDb();
+  const now = nowMs();
+  let form: any;
+  if (args.form_id) {
+    form = (await db.select().from(formTemplates).where(
+      and(eq(formTemplates.id, args.form_id as string), eq(formTemplates.tenantId, tenantId))
+    ).limit(1))[0];
+  } else if (args.name) {
+    form = (await db.select().from(formTemplates).where(
+      and(eq(formTemplates.name, args.name as string), eq(formTemplates.tenantId, tenantId))
+    ).limit(1))[0];
+  }
+  if (!form) return { error: `Form "${args.form_id ?? args.name}" không tìm thấy` };
+
+  const updates: Record<string, unknown> = { updatedAt: now };
+  if (args.fields) {
+    updates.schema = JSON.stringify({ fields: args.fields });
+    updates.version = (form.version ?? 1) + 1;
+  }
+  if (args.status !== undefined) updates.status = args.status;
+
+  await db.update(formTemplates).set(updates).where(eq(formTemplates.id, form.id));
+  return { updated: true, id: form.id, name: form.name, version: updates.version ?? form.version };
 });
 
 registerTool("start_workflow_instance", async (args, tenantId) => {
@@ -967,8 +1034,10 @@ registerTool("stop_bot", async (args, _tenantId, ctx) => {
 
 const _descs: Record<string, string> = {
   list_workflows: "Xem danh sách quy trình",
-  create_workflow: "Tạo quy trình mới (name, description, stages)",
+  create_workflow: "Tạo quy trình mới (name, description, stages — GIỮ NGUYÊN tất cả fields của stage)",
+  update_workflow: "Cập nhật workflow ĐÃ CÓ — dùng khi workflow tên đó tồn tại rồi (workflow_id hoặc name, + stages/description/status cần sửa)",
   create_form: "Tạo form template (name, fields[{id,label,type,required}])",
+  update_form: "Cập nhật form ĐÃ CÓ — dùng khi form tên đó tồn tại rồi (form_id hoặc name, fields)",
   create_rule: "Tạo business rule (name, domain, rule_type, conditions, actions)",
   start_workflow_instance: "Bắt đầu quy trình (template_id)",
   save_tutorial: "Lưu tutorial (title, content, domain)",
