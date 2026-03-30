@@ -3,9 +3,9 @@
  */
 
 import { getDb } from "../db/connection.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { notebookWrite } from "../modules/notebooks/notebook.service.js";
-import { storeKnowledge, retrieveKnowledge } from "../modules/knowledge/knowledge.service.js";
+import { storeKnowledge } from "../modules/knowledge/knowledge.service.js";
 import { getDashboard } from "../modules/monitoring/monitor.service.js";
 import { startWorkflow } from "../modules/workflows/workflow-engine.service.js";
 import { getFile, listFiles, readFileContent } from "../modules/storage/s3.service.js";
@@ -140,26 +140,36 @@ registerTool("save_tutorial", async (args, tenantId) => {
   return { saved: true, title: args.title };
 });
 
-registerTool("save_knowledge", async (args) => {
-  const commander = getCommander();
-  const entry = await storeKnowledge({
-    type: (args.type as any) ?? "domain_knowledge", title: args.title as string,
-    content: args.content as string, domain: (args.domain as string) ?? "general",
-    tags: (args.tags as string[]) ?? [], sourceAgentId: commander?.agent.id ?? "system",
-  });
-  return { id: entry.id, title: entry.title };
+// ── Bot Docs (simple knowledge — inject into prompt) ──────────
+
+// ── Bot Doc (1 per tenant — upsert) ───────────────────────────
+
+registerTool("save_doc", async (args, tenantId, ctx) => {
+  const db = getDb();
+  // Check if doc exists for this tenant
+  const existing = await db.execute(sql`SELECT id FROM bot_docs WHERE tenant_id = ${tenantId} LIMIT 1`);
+  if ((existing as any[]).length > 0) {
+    // Update existing
+    const mode = (args.mode as string) ?? "append";
+    if (mode === "replace") {
+      await db.execute(sql`UPDATE bot_docs SET content = ${args.content as string}, created_by = ${ctx.currentUser?.id ?? ""}, created_by_name = ${ctx.currentUser?.name ?? ""}, created_at = ${Date.now()} WHERE tenant_id = ${tenantId}`);
+    } else {
+      // Append
+      await db.execute(sql`UPDATE bot_docs SET content = content || ${"\n\n" + (args.content as string)}, created_by = ${ctx.currentUser?.id ?? ""}, created_by_name = ${ctx.currentUser?.name ?? ""}, created_at = ${Date.now()} WHERE tenant_id = ${tenantId}`);
+    }
+    return { updated: true, mode };
+  } else {
+    // Create new
+    const id = newId();
+    await db.execute(sql`INSERT INTO bot_docs (id, tenant_id, title, content, created_by, created_by_name, created_at) VALUES (${id}, ${tenantId}, ${"Bot Knowledge"}, ${args.content as string}, ${ctx.currentUser?.id ?? ""}, ${ctx.currentUser?.name ?? ""}, ${Date.now()})`);
+    return { id, created: true };
+  }
 });
 
-registerTool("list_tutorials", async (args) => {
-  return (await retrieveKnowledge({ tags: ["tutorial"], capabilities: [], domain: (args.domain as string) ?? "general", limit: 10 }))
-    .map(r => ({ title: r.title, domain: r.domain, content: r.content.substring(0, 200) + "..." }));
-});
-
-registerTool("search_knowledge", async (args) => {
-  return (await retrieveKnowledge({
-    tags: (args.tags as string[]) ?? [], capabilities: [],
-    domain: (args.domain as string) ?? "general", limit: 5,
-  })).map(r => ({ title: r.title, content: r.content.substring(0, 200), score: r.matchScore }));
+registerTool("get_doc", async (_args, tenantId) => {
+  const db = getDb();
+  const rows = await db.execute(sql`SELECT content FROM bot_docs WHERE tenant_id = ${tenantId} LIMIT 1`);
+  return (rows as any[])[0]?.content ?? "Chưa có kiến thức.";
 });
 
 // ── Monitoring ─────────────────────────────────────────────

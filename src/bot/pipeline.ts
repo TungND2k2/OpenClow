@@ -81,8 +81,22 @@ export async function processWithCommander(input: {
     const { buildFileContextForUser } = await import("../modules/context/user-file-context.js");
     const fileContext = buildFileContextForUser(input.tenantId, input.userId);
 
+    // Load bot doc (1 per tenant — inject thẳng vào prompt)
+    let docsContext = "";
+    try {
+      const { getDb } = await import("../db/connection.js");
+      const { sql } = await import("drizzle-orm");
+      const db = getDb();
+      const docs = await db.execute(sql`SELECT content FROM bot_docs WHERE tenant_id = ${input.tenantId} LIMIT 1`);
+      const content = (docs as any[])[0]?.content;
+      if (content) {
+        docsContext = `\n\nKIẾN THỨC ĐÃ HỌC:\n${content}`;
+      }
+    } catch {}
+
     const systemPrompt = buildCommanderPrompt(input.tenantName, input.userName, input.userRole, input.aiConfig)
       + (resourceContext ? `\n\nHỆ THỐNG CÓ:\n${resourceContext}` : "")
+      + docsContext
       + fileContext;
 
     // Get DB summary for session recovery
