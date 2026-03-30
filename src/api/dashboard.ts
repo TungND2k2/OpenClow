@@ -161,6 +161,25 @@ export async function startDashboardAPI(port = 3102) {
     res.json(rows);
   });
 
+  // ── Bot Docs (1 per tenant) ──────────────────────────
+  app.get("/api/bots/:tenantId/docs", async (req, res) => {
+    const rows = await db.execute(sql`SELECT * FROM bot_docs WHERE tenant_id = ${req.params.tenantId} LIMIT 1`);
+    res.json((rows as any[])[0] ?? null);
+  });
+
+  app.put("/api/bots/:tenantId/docs", async (req, res) => {
+    const { content } = req.body;
+    const tenantId = req.params.tenantId;
+    const existing = await db.execute(sql`SELECT id FROM bot_docs WHERE tenant_id = ${tenantId} LIMIT 1`);
+    if ((existing as any[]).length > 0) {
+      await db.execute(sql`UPDATE bot_docs SET content = ${content}, created_at = ${Date.now()} WHERE tenant_id = ${tenantId}`);
+    } else {
+      const { newId } = await import("../utils/id.js");
+      await db.execute(sql`INSERT INTO bot_docs (id, tenant_id, title, content, created_at) VALUES (${newId()}, ${tenantId}, ${"Bot Knowledge"}, ${content}, ${Date.now()})`);
+    }
+    res.json({ ok: true });
+  });
+
   // ── Bot Logs (persistent) ────────────────────────────
   app.get("/api/logs", async (req, res) => {
     const { getLogs } = await import("../modules/logs/bot-logger.js");

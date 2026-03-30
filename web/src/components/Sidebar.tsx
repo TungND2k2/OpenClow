@@ -19,6 +19,7 @@ const navItems: NavItem[] = [
   { id: "rules",       label: "Rules",       icon: "◭",  group: "bot" },
   { id: "agents",      label: "Agents",      icon: "◯",  group: "bot" },
   { id: "crons",       label: "Crons",       icon: "◷",  group: "bot" },
+  { id: "docs",        label: "Knowledge",   icon: "📖", group: "bot" },
   { id: "logs",        label: "Live Logs",   icon: "◉",  group: "system" },
 ];
 

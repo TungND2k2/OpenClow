@@ -8,6 +8,7 @@ import { CrudPage } from "./pages/CrudPage";
 import { formsConfig, workflowsConfig, rulesConfig, agentsConfig } from "./pages/crudConfigs";
 import { UsersPage, FilesPage, KnowledgePage, SessionsPage, CronsPage } from "./pages/ReadPage";
 import { LogsPage } from "./pages/LogsPage";
+import { DocsPage } from "./pages/DocsPage";
 
 const PAGE_TITLES: Record<Page, string> = {
   dashboard:   "Dashboard",
@@ -21,6 +22,7 @@ const PAGE_TITLES: Record<Page, string> = {
   rules:       "Rules",
   agents:      "Agents",
   crons:       "Crons",
+  docs:        "Knowledge Docs",
   logs:        "Live Logs",
 };
 
@@ -57,6 +59,7 @@ function App() {
       case "workflows":   return <CrudPage config={workflowsConfig} botId={botId} />;
       case "rules":       return <CrudPage config={rulesConfig} botId={botId} />;
       case "agents":      return <CrudPage config={agentsConfig} botId={botId} />;
+      case "docs":        return <DocsPage botId={botId} />;
       default:            return null;
     }
   };

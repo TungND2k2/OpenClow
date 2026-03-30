@@ -10,6 +10,7 @@ export type Page =
   | "rules"
   | "agents"
   | "crons"
+  | "docs"
   | "logs";
 
 export interface Bot {
