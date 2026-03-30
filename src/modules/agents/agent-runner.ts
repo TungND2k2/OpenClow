@@ -11,7 +11,7 @@
 
 import type { InferSelectModel } from "drizzle-orm";
 import type { agents } from "../../db/schemas/agents.js";
-import Anthropic from "@anthropic-ai/sdk";
+// Claude Agent SDK used via dynamic import in callSDK()
 
 export type AgentRecord = InferSelectModel<typeof agents>;
 export type LLMEngine = "fast-api" | "claude-sdk" | "claude-cli";
@@ -76,7 +76,7 @@ export class AgentRunner {
   ): Promise<ThinkResult> {
     if (this.engine === "claude-sdk" || this.engine === "claude-cli") {
       try {
-        return await this.callAnthropicMessages(userMessage, conversationHistory);
+        return await this.callSDK(userMessage, conversationHistory);
       } catch (err: any) {
         console.error(`[Agent:${this.agent.name}] Anthropic API failed: ${err.message.substring(0, 100)} → fallback fast-api`);
         return this.callFastAPIWithTools(userMessage, conversationHistory);
@@ -86,95 +86,92 @@ export class AgentRunner {
   }
 
   /**
-   * Anthropic Messages API — native tool calling via tool_use/tool_result blocks.
+   * Claude Agent SDK — uses Max subscription via OAuth (claude login).
+   * query() handles tool output as text, we parse + execute + feed back.
    */
-  private async callAnthropicMessages(
+  private async callSDK(
     userMessage: string,
     history: { role: string; content: string }[],
   ): Promise<ThinkResult> {
-    const { getConfig } = await import("../../config.js");
-    const cfg = getConfig();
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
     const prefix = `[Agent:${this.agent.name}]`;
-
-    // Auth priority: COMMANDER_API_KEY > CLAUDE_CODE_OAUTH_TOKEN > ANTHROPIC_API_KEY (env)
-    let client: Anthropic;
-    if (cfg.COMMANDER_API_KEY) {
-      client = new Anthropic({ apiKey: cfg.COMMANDER_API_KEY });
-    } else if (cfg.CLAUDE_CODE_OAUTH_TOKEN) {
-      client = new Anthropic({ authToken: cfg.CLAUDE_CODE_OAUTH_TOKEN });
-    } else {
-      // Fallback: SDK auto-reads ANTHROPIC_API_KEY from env
-      client = new Anthropic();
-    }
-
-    // Map tool definitions to Anthropic format
-    const anthropicTools: Anthropic.Tool[] = this.tools.map(t => ({
-      name: t.name,
-      description: t.description,
-      input_schema: t.parameters as Anthropic.Tool.InputSchema,
-    }));
-
-    // Build message array from conversation history
-    const messages: Anthropic.MessageParam[] = [
-      ...history.map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
-      { role: "user", content: userMessage },
-    ];
-
-    // Inject dbSummary into system prompt for context recovery
-    const systemStr = this.dbSummary
-      ? `${this.systemPrompt}\n\n[Context phiên trước]: ${this.dbSummary}`
-      : this.systemPrompt;
-
     const allToolResults: ToolResult[] = [];
-    console.error(`${prefix} Anthropic API calling (${this.tools.length} tools)...`);
 
-    for (let loop = 0; loop <= this.maxToolLoops; loop++) {
-      const response = await client.messages.create({
-        model: cfg.COMMANDER_MODEL,
-        max_tokens: 4096,
-        system: systemStr,
-        messages,
-        ...(anthropicTools.length > 0 ? { tools: anthropicTools } : {}),
-      });
-
-      // Add assistant turn to message history for next iteration
-      messages.push({ role: "assistant", content: response.content });
-
-      if (response.stop_reason !== "tool_use") {
-        const text = response.content
-          .filter((b): b is Anthropic.TextBlock => b.type === "text")
-          .map(b => b.text)
-          .join("");
-        console.error(`${prefix} done: ${allToolResults.length} tools called`);
-        return { text, toolCalls: allToolResults };
-      }
-
-      // Execute all tool_use blocks
-      const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-      const toolResultContent: Anthropic.ToolResultBlockParam[] = [];
-
-      for (const block of toolUseBlocks) {
-        const args = block.input as Record<string, unknown>;
-        let result: unknown;
-        try {
-          result = await this.executeTool(block.name, args);
-          allToolResults.push({ tool: block.name, args, result });
-        } catch (err: any) {
-          result = { error: err.message };
-          allToolResults.push({ tool: block.name, args, result });
-        }
-        toolResultContent.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: JSON.stringify(result).substring(0, 3000),
-        });
-      }
-
-      messages.push({ role: "user", content: toolResultContent });
+    // Build prompt with history
+    let prompt = userMessage;
+    if (history.length > 0) {
+      const historyText = history.map(h => `${h.role === "user" ? "User" : "Assistant"}: ${h.content}`).join("\n\n");
+      prompt = `${historyText}\n\nUser: ${userMessage}`;
+    }
+    if (this.dbSummary) {
+      prompt = `[Context phiên trước]: ${this.dbSummary}\n\n---\n\n${prompt}`;
     }
 
-    console.error(`${prefix} reached tool loop limit`);
-    return { text: "Đã đạt giới hạn xử lý.", toolCalls: allToolResults };
+    console.error(`${prefix} SDK calling...`);
+    let finalText = "";
+
+    for await (const msg of query({
+      prompt,
+      options: {
+        systemPrompt: this.systemPrompt,
+        allowedTools: [],
+        maxTurns: this.maxToolLoops,
+      },
+    })) {
+      if (msg.type === "assistant" && (msg as any).message) {
+        for (const block of (msg as any).message.content ?? []) {
+          if (typeof block === "string") finalText += block;
+          else if (block.type === "text") finalText += block.text;
+        }
+      }
+      if (msg.type === "result" && "result" in msg) {
+        finalText = (msg as any).result ?? finalText;
+      }
+    }
+
+    // Tool loop: parse tool_calls from text → execute → feed back → repeat
+    let currentText = finalText;
+    for (let loop = 0; loop < this.maxToolLoops; loop++) {
+      const toolCalls = this.parseToolCalls(currentText);
+      if (toolCalls.length === 0) break;
+
+      for (const tc of toolCalls) {
+        try {
+          const result = await this.executeTool(tc.tool, tc.args);
+          allToolResults.push({ tool: tc.tool, args: tc.args, result });
+        } catch (err: any) {
+          allToolResults.push({ tool: tc.tool, args: tc.args, result: { error: err.message } });
+        }
+      }
+
+      const toolResultText = allToolResults.slice(-toolCalls.length)
+        .map(r => `[Tool: ${r.tool}] Result:\n${JSON.stringify(r.result, null, 2).substring(0, 1500)}`)
+        .join("\n\n");
+
+      currentText = "";
+      for await (const msg of query({
+        prompt: toolResultText + "\n\nDựa trên kết quả, tiếp tục hoặc trả lời user.",
+        options: {
+          systemPrompt: this.systemPrompt,
+          allowedTools: [],
+          maxTurns: 1,
+        },
+      })) {
+        if (msg.type === "assistant" && (msg as any).message) {
+          for (const block of (msg as any).message.content ?? []) {
+            if (typeof block === "string") currentText += block;
+            else if (block.type === "text") currentText += block.text;
+          }
+        }
+        if (msg.type === "result" && "result" in msg) {
+          currentText = (msg as any).result ?? currentText;
+        }
+      }
+    }
+
+    const cleanText = currentText.replace(/```tool_calls[\s\S]*?```/g, "").trim();
+    console.error(`${prefix} SDK done: ${allToolResults.length} tools`);
+    return { text: cleanText || finalText.replace(/```tool_calls[\s\S]*?```/g, "").trim(), toolCalls: allToolResults };
   }
 
   /**
