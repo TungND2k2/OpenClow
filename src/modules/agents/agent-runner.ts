@@ -86,14 +86,15 @@ export class AgentRunner {
   }
 
   /**
-   * Claude Agent SDK — uses Max subscription via OAuth (claude login).
-   * query() handles tool output as text, we parse + execute + feed back.
+   * Claude Agent SDK + MCP — native tool calling via Max subscription.
+   * SDK spawns MCP subprocess → discovers tools → calls native → no text parsing.
    */
   private async callSDK(
     userMessage: string,
     history: { role: string; content: string }[],
   ): Promise<ThinkResult> {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const { resolve } = await import("path");
     const prefix = `[Agent:${this.agent.name}]`;
     const allToolResults: ToolResult[] = [];
 
@@ -107,21 +108,39 @@ export class AgentRunner {
       prompt = `[Context phiên trước]: ${this.dbSummary}\n\n---\n\n${prompt}`;
     }
 
-    console.error(`${prefix} SDK calling...`);
+    console.error(`${prefix} SDK + MCP calling...`);
     let finalText = "";
+
+    // MCP server path — same codebase
+    const mcpServerPath = resolve(process.cwd(), "src/mcp/stdio-server.ts");
 
     for await (const msg of query({
       prompt,
       options: {
         systemPrompt: this.systemPrompt,
-        allowedTools: [],
         maxTurns: this.maxToolLoops,
+        mcpServers: {
+          openclaw: {
+            command: "npx",
+            args: ["tsx", mcpServerPath],
+            env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>,
+          },
+        },
       },
     })) {
+      // Track tool calls from SDK messages
       if (msg.type === "assistant" && (msg as any).message) {
         for (const block of (msg as any).message.content ?? []) {
           if (typeof block === "string") finalText += block;
           else if (block.type === "text") finalText += block.text;
+          else if (block.type === "tool_use") {
+            // SDK called a tool natively via MCP
+            allToolResults.push({
+              tool: block.name,
+              args: block.input as Record<string, unknown>,
+              result: "executed via MCP",
+            });
+          }
         }
       }
       if (msg.type === "result" && "result" in msg) {
@@ -129,49 +148,8 @@ export class AgentRunner {
       }
     }
 
-    // Tool loop: parse tool_calls from text → execute → feed back → repeat
-    let currentText = finalText;
-    for (let loop = 0; loop < this.maxToolLoops; loop++) {
-      const toolCalls = this.parseToolCalls(currentText);
-      if (toolCalls.length === 0) break;
-
-      for (const tc of toolCalls) {
-        try {
-          const result = await this.executeTool(tc.tool, tc.args);
-          allToolResults.push({ tool: tc.tool, args: tc.args, result });
-        } catch (err: any) {
-          allToolResults.push({ tool: tc.tool, args: tc.args, result: { error: err.message } });
-        }
-      }
-
-      const toolResultText = allToolResults.slice(-toolCalls.length)
-        .map(r => `[Tool: ${r.tool}] Result:\n${JSON.stringify(r.result, null, 2).substring(0, 1500)}`)
-        .join("\n\n");
-
-      currentText = "";
-      for await (const msg of query({
-        prompt: toolResultText + "\n\nDựa trên kết quả, tiếp tục hoặc trả lời user.",
-        options: {
-          systemPrompt: this.systemPrompt,
-          allowedTools: [],
-          maxTurns: 1,
-        },
-      })) {
-        if (msg.type === "assistant" && (msg as any).message) {
-          for (const block of (msg as any).message.content ?? []) {
-            if (typeof block === "string") currentText += block;
-            else if (block.type === "text") currentText += block.text;
-          }
-        }
-        if (msg.type === "result" && "result" in msg) {
-          currentText = (msg as any).result ?? currentText;
-        }
-      }
-    }
-
-    const cleanText = currentText.replace(/```tool_calls[\s\S]*?```/g, "").trim();
-    console.error(`${prefix} SDK done: ${allToolResults.length} tools`);
-    return { text: cleanText || finalText.replace(/```tool_calls[\s\S]*?```/g, "").trim(), toolCalls: allToolResults };
+    console.error(`${prefix} SDK + MCP done: ${allToolResults.length} tools`);
+    return { text: finalText.trim(), toolCalls: allToolResults };
   }
 
   /**
