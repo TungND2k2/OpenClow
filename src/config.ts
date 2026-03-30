@@ -14,6 +14,7 @@ const configSchema = z.object({
   // Commander LLM
   COMMANDER_API_BASE: z.string().default("https://api.anthropic.com"),
   COMMANDER_API_KEY: z.string().optional(),
+  CLAUDE_CODE_OAUTH_TOKEN: z.string().optional().transform(v => v && v.length > 10 ? v : undefined),
   COMMANDER_MODEL: z.string().default("claude-sonnet-4-20250514"),
 
   // Worker LLM (cheap API)

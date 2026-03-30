@@ -96,7 +96,16 @@ export class AgentRunner {
     const cfg = getConfig();
     const prefix = `[Agent:${this.agent.name}]`;
 
-    const client = new Anthropic({ apiKey: cfg.COMMANDER_API_KEY });
+    // Auth priority: COMMANDER_API_KEY > CLAUDE_CODE_OAUTH_TOKEN > ANTHROPIC_API_KEY (env)
+    let client: Anthropic;
+    if (cfg.COMMANDER_API_KEY) {
+      client = new Anthropic({ apiKey: cfg.COMMANDER_API_KEY });
+    } else if (cfg.CLAUDE_CODE_OAUTH_TOKEN) {
+      client = new Anthropic({ authToken: cfg.CLAUDE_CODE_OAUTH_TOKEN });
+    } else {
+      // Fallback: SDK auto-reads ANTHROPIC_API_KEY from env
+      client = new Anthropic();
+    }
 
     // Map tool definitions to Anthropic format
     const anthropicTools: Anthropic.Tool[] = this.tools.map(t => ({
