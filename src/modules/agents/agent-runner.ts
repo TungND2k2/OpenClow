@@ -119,6 +119,7 @@ export class AgentRunner {
       options: {
         systemPrompt: this.systemPrompt,
         maxTurns: this.maxToolLoops,
+        permissionMode: "bypassPermissions",
         mcpServers: {
           openclaw: {
             command: "npx",
