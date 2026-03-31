@@ -16,7 +16,7 @@ import { invalidateCache } from "../modules/cache/resource-cache.js";
 import { getResourceSummary, buildResourceSummary, formatSummaryForPrompt } from "../modules/cache/resource-cache.js";
 import { buildCommanderPrompt } from "./prompt-builder.js";
 import { botLog } from "../modules/logs/bot-logger.js";
-import { retrieveKnowledge } from "../modules/knowledge/knowledge.service.js";
+// knowledge.service removed
 import * as log from "./middleware/logger.js";
 import type { PipelineContext } from "./middleware/types.js";
 
@@ -107,22 +107,7 @@ export async function processWithCommander(input: {
     // Propagate to ctx so logger can read them
     ctx.systemPrompt = systemPrompt;
     ctx.fileContext = fileContext;
-    // ── Knowledge context (retrieve relevant entries for this message) ──
-    let knowledgeContext = "";
-    try {
-      const keywords = input.userMessage.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      const knowledgeEntries = await retrieveKnowledge({
-        tags: keywords,
-        capabilities: [],
-        domain: "general",
-        scope: ["global"],
-        limit: 3,
-        tenantId: input.tenantId,
-      });
-      if (knowledgeEntries.length > 0 && knowledgeEntries[0].matchScore > 0.3) {
-        knowledgeContext = `\n\nKNOWLEDGE:\n${knowledgeEntries.map(k => `[${k.type}] ${k.title}: ${k.content.substring(0, 300)}`).join("\n")}`;
-      }
-    } catch {}
+    // Knowledge now comes from bot_docs (injected in context step above)
 
     // Get DB summary for session recovery (inject into system prompt for new conversations)
     let dbSummary = "";
@@ -154,7 +139,7 @@ export async function processWithCommander(input: {
       agent: commander.agent,
       engine,
       tools: AGENT_TOOLS,
-      systemPrompt: systemPrompt + knowledgeContext,
+      systemPrompt,
       tenantId: input.tenantId,
       userId: input.userId,
       dbSummary,

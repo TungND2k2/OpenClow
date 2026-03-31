@@ -23,24 +23,24 @@ const DEFAULT_PERMISSIONS: Record<string, Record<string, string>> = {
     business_rules: "CRUM",
     collections: "CRUDM",
     collection_rows: "CRUDM",
-    knowledge_entries: "CR",
+    bot_docs: "CR",
     tenant_users: "R",
   },
   sales: {
     form_templates: "R",
     collections: "R",
     collection_rows: "CRU",
-    knowledge_entries: "R",
+    bot_docs: "R",
   },
   staff: {
     form_templates: "R",
     collections: "R",
     collection_rows: "CRU",
-    knowledge_entries: "R",
+    bot_docs: "R",
   },
   user: {
     collection_rows: "R",
-    knowledge_entries: "R",
+    bot_docs: "R",
   },
 };
 

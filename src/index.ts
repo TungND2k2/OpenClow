@@ -8,7 +8,7 @@ import { startProxy, stopProxy } from "./proxy/proxy.service.js";
 import { startTelegramBot, stopTelegramBot } from "./bot/telegram.bot.js";
 import { initAgentPool } from "./modules/agents/agent-pool.js";
 import { executeTool } from "./bot/agent-bridge.js";
-import { cleanupDuplicateRules } from "./modules/knowledge/knowledge.service.js";
+// knowledge.service removed
 import { initResourceCache } from "./modules/cache/resource-cache.js";
 import { onEvent } from "./modules/events/event-bus.js";
 import { handleEvent } from "./modules/events/event-handler.js";
@@ -28,8 +28,7 @@ async function main() {
   });
   console.error(`[OpenClaw] Agent pool ready`);
 
-  // 3b. Cleanup duplicate knowledge rules
-  await cleanupDuplicateRules();
+  // 3b. Knowledge cleanup removed — using bot_docs
 
   // 3c. Build resource cache for all tenants
   await initResourceCache();

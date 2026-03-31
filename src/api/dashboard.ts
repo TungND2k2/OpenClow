@@ -8,7 +8,7 @@ import cors from "cors";
 import { getDb } from "../db/connection.js";
 import {
   tenants, tenantUsers, collections, collectionRows,
-  files, knowledgeEntries, conversationSessions,
+  files, conversationSessions,
   formTemplates, workflowTemplates, businessRules,
   agentTemplates,
 } from "../db/schema.js";
@@ -43,7 +43,7 @@ export async function startDashboardAPI(port = 3102) {
       db.select({ count: sql<number>`count(*)` }).from(collections),
       db.select({ count: sql<number>`count(*)` }).from(collectionRows),
       db.select({ count: sql<number>`count(*)` }).from(files),
-      db.select({ count: sql<number>`count(*)` }).from(knowledgeEntries),
+      db.execute(sql`SELECT count(*) as count FROM bot_docs`),
       db.select({ count: sql<number>`count(*)` }).from(conversationSessions),
     ]);
     res.json({
@@ -105,11 +105,9 @@ export async function startDashboardAPI(port = 3102) {
     res.json(rows);
   });
 
-  // ── Knowledge per tenant ────────────────────────────
+  // ── Knowledge per tenant (now bot_docs) ─────────────
   app.get("/api/bots/:tenantId/knowledge", async (req, res) => {
-    const rows = await db.select().from(knowledgeEntries)
-      .where(eq(knowledgeEntries.tenantId, req.params.tenantId))
-      .orderBy(desc(knowledgeEntries.usageCount));
+    const rows = await db.execute(sql`SELECT * FROM bot_docs WHERE tenant_id = ${req.params.tenantId}`);
     res.json(rows);
   });
 
@@ -309,9 +307,9 @@ export async function startDashboardAPI(port = 3102) {
     res.json({ ok: true });
   });
 
-  // ── Delete: Knowledge ─────────────────────────────────────
+  // ── Delete: Knowledge (bot_docs) ──────────────────────────
   app.delete("/api/knowledge/:id", async (req, res) => {
-    await db.delete(knowledgeEntries).where(eq(knowledgeEntries.id, req.params.id));
+    await db.execute(sql`DELETE FROM bot_docs WHERE id = ${req.params.id}`);
     res.json({ ok: true });
   });
 

@@ -5,7 +5,7 @@
 import { getDb } from "../db/connection.js";
 import { eq, and, sql } from "drizzle-orm";
 import { notebookWrite } from "../modules/notebooks/notebook.service.js";
-import { storeKnowledge, retrieveKnowledge } from "../modules/knowledge/knowledge.service.js";
+// knowledge.service removed — using bot_docs instead
 import { getDashboard } from "../modules/monitoring/monitor.service.js";
 import { startWorkflow } from "../modules/workflows/workflow-engine.service.js";
 import { getFile, listFiles, readFileContent } from "../modules/storage/s3.service.js";
@@ -191,52 +191,18 @@ registerTool("start_workflow_instance", async (args, tenantId) => {
   return { instanceId: instance.id, status: instance.status };
 });
 
-// ── Knowledge Tools ────────────────────────────────────────
+// ── Knowledge → redirects to save_doc ──────────────────────
 
-registerTool("save_knowledge", async (args, tenantId) => {
-  const commander = getCommander();
-  const entry = await storeKnowledge({
-    type: (args.type as any) ?? "fact",
-    title: args.title as string,
-    content: args.content as string,
-    domain: (args.domain as string) ?? "general",
-    tags: (args.tags as string[]) ?? [],
-    sourceAgentId: commander?.agent.id ?? "system",
-    scope: "global",
-    tenantId,
-  });
-  return { saved: true, id: entry.id, title: entry.title };
-});
-
-registerTool("search_knowledge", async (args, tenantId) => {
-  const results = await retrieveKnowledge({
-    tags: (args.tags as string[]) ?? [],
-    capabilities: [],
-    domain: (args.domain as string) ?? "general",
-    scope: ["global"],
-    limit: (args.limit as number) ?? 5,
-    tenantId,
-  });
-  return results.map(r => ({
-    id: r.id, type: r.type, title: r.title,
-    content: r.content.substring(0, 500),
-    domain: r.domain, tags: r.tags,
-    matchScore: r.matchScore,
-  }));
-});
-
-registerTool("save_tutorial", async (args, tenantId) => {
-  const commander = getCommander();
-  await storeKnowledge({
-    type: "procedure", title: args.title as string, content: args.content as string,
-    domain: (args.domain as string) ?? "general", tags: ["tutorial", (args.target_role as string) ?? "general"],
-    sourceAgentId: commander?.agent.id ?? "system", scope: `domain:${(args.target_role as string) ?? "general"}`,
-    tenantId,
-  });
-  await notebookWrite({
-    namespace: `tutorial:${tenantId}`, key: (args.title as string).toLowerCase().replace(/\s+/g, "-"),
-    value: args.content as string, contentType: "text/markdown",
-  });
+registerTool("save_knowledge", async (args, tenantId, ctx) => {
+  // Redirect to save_doc — single knowledge doc per tenant
+  const content = `## ${args.title ?? "Knowledge"}\n${args.content ?? ""}`;
+  const db = getDb();
+  const existing = await db.execute(sql`SELECT id FROM bot_docs WHERE tenant_id = ${tenantId} LIMIT 1`);
+  if ((existing as any[]).length > 0) {
+    await db.execute(sql`UPDATE bot_docs SET content = content || ${"\n\n" + content}, created_at = ${Date.now()} WHERE tenant_id = ${tenantId}`);
+  } else {
+    await db.execute(sql`INSERT INTO bot_docs (id, tenant_id, title, content, created_by, created_by_name, created_at) VALUES (${newId()}, ${tenantId}, ${"Bot Knowledge"}, ${content}, ${ctx.currentUser?.id ?? ""}, ${ctx.currentUser?.name ?? ""}, ${Date.now()})`);
+  }
   return { saved: true, title: args.title };
 });
 
@@ -645,7 +611,7 @@ registerTool("db_query", async (args, tenantId, ctx) => {
     business_rules: (await import("../db/schema.js")).businessRules,
     collections: (await import("../db/schema.js")).collections,
     collection_rows: (await import("../db/schema.js")).collectionRows,
-    knowledge_entries: (await import("../db/schema.js")).knowledgeEntries,
+    // knowledge_entries removed — using bot_docs
   };
   const dbTable = tableMap[table];
   if (!dbTable) return { error: `Table ${table} not mapped` };
