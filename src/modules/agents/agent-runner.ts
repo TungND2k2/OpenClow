@@ -44,7 +44,8 @@ export interface AgentRunnerConfig {
   maxToolLoops?: number;
   tenantId?: string;
   userId?: string;
-  dbSummary?: string; // inject from PostgreSQL when SDK session lost
+  dbSummary?: string;
+  onProgress?: (stage: string) => Promise<void>;
 }
 
 export class AgentRunner {
@@ -57,6 +58,7 @@ export class AgentRunner {
   private tenantId: string;
   private userId: string;
   private dbSummary: string;
+  private onProgress?: (stage: string) => Promise<void>;
 
   constructor(config: AgentRunnerConfig) {
     this.agent = config.agent;
@@ -67,6 +69,7 @@ export class AgentRunner {
     this.maxToolLoops = config.maxToolLoops ?? 10;
     this.tenantId = config.tenantId ?? "";
     this.userId = config.userId ?? "";
+    this.onProgress = config.onProgress;
     this.dbSummary = config.dbSummary ?? "";
   }
 
@@ -98,11 +101,15 @@ export class AgentRunner {
     const prefix = `[Agent:${this.agent.name}]`;
     const allToolResults: ToolResult[] = [];
 
-    // Build prompt with history
-    let prompt = userMessage;
+    // Build prompt with history — dùng XML tags để SDK giữ đúng role context
+    let prompt: string;
     if (history.length > 0) {
-      const historyText = history.map(h => `${h.role === "user" ? "User" : "Assistant"}: ${h.content}`).join("\n\n");
-      prompt = `${historyText}\n\nUser: ${userMessage}`;
+      const historyXml = history
+        .map(h => `<turn role="${h.role === "user" ? "user" : "assistant"}">${h.content}</turn>`)
+        .join("\n");
+      prompt = `<conversation_history>\n${historyXml}\n</conversation_history>\n\n<current_message>\n${userMessage}\n</current_message>`;
+    } else {
+      prompt = userMessage;
     }
     if (this.dbSummary) {
       prompt = `[Context phiên trước]: ${this.dbSummary}\n\n---\n\n${prompt}`;
@@ -124,7 +131,11 @@ export class AgentRunner {
           openclaw: {
             command: "npx",
             args: ["tsx", mcpServerPath],
-            env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>,
+            // SKIP_MIGRATIONS=1: parent đã chạy migrate rồi, subprocess bỏ qua
+            env: {
+              ...Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<string, string>,
+              SKIP_MIGRATIONS: "1",
+            },
           },
         },
       },
@@ -219,8 +230,20 @@ export class AgentRunner {
     for (const pattern of patterns) {
       const match = text.match(pattern);
       if (!match) continue;
+      const raw = match[1].trim();
+      // Pass 1: parse thẳng
       try {
-        const parsed = JSON.parse(match[1].trim());
+        const parsed = JSON.parse(raw);
+        return (Array.isArray(parsed) ? parsed : [parsed]).filter((t: any) => t.tool).map((t: any) => ({ tool: t.tool, args: t.args ?? {} }));
+      } catch { /* fall through to sanitize */ }
+      // Pass 2: normalize smart quotes và control chars trước khi parse
+      try {
+        const sanitized = raw
+          .replace(/[\u2018\u2019]/g, "'")
+          .replace(/[\u201C\u201D]/g, '"')
+          .replace(/[\u2013\u2014]/g, "-")
+          .replace(/[\r\n]+(?=[^,\[\]{}'"\s])/g, " ");
+        const parsed = JSON.parse(sanitized);
         return (Array.isArray(parsed) ? parsed : [parsed]).filter((t: any) => t.tool).map((t: any) => ({ tool: t.tool, args: t.args ?? {} }));
       } catch { continue; }
     }

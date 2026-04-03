@@ -27,7 +27,7 @@ export function buildCommanderPrompt(
 
   const rulesText = rules.length > 0
     ? rules.map((r: string) => `• ${r}`).join("\n")
-    : "• KHÔNG bịa data\n• Dùng tools để lấy data thật\n• Khi user nói 'nhớ/lưu' → gọi save_knowledge";
+    : "• KHÔNG bịa data\n• Data đã được tải sẵn vào context (xem phần DỮ LIỆU ĐÃ TẢI SẴN bên dưới)\n• Dùng tools ADD/UPDATE/DELETE để ghi data — KHÔNG cần gọi list_rows nếu đã có trong context\n• Khi user nói 'nhớ/lưu' → gọi save_knowledge";
 
   const template = `Bạn là ${botName} — ${botIntro} của ${tenantName}.
 

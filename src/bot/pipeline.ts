@@ -47,6 +47,7 @@ export async function processWithCommander(input: {
   onProgress?: (stage: string) => Promise<void>;
   onPersonaMessage?: (msg: PersonaMsg) => Promise<void>;
   sessionId?: string;
+  formContext?: string;
 }): Promise<CommanderResponse> {
   const startTime = Date.now();
   const _files: CommanderResponse["files"] = [];
@@ -63,7 +64,7 @@ export async function processWithCommander(input: {
     conversationHistory: input.conversationHistory, aiConfig: input.aiConfig,
     sessionId: input.sessionId ?? "", onProgress: input.onProgress,
     onPersonaMessage: input.onPersonaMessage,
-    knowledgeContext: "", fileContext: "", formContext: "", systemPrompt: "",
+    knowledgeContext: "", fileContext: "", formContext: input.formContext ?? "", systemPrompt: "",
     currentUser: { id: input.userId, name: input.userName, role: input.userRole },
     text: "", files: [], toolCalls: [],
   };
@@ -94,6 +95,12 @@ export async function processWithCommander(input: {
       }
     } catch {}
 
+    // ── Pre-fetch data (Push model) ───────────────────────
+    // Detect relevant collections → fetch rows → inject into context.
+    // LLM nhận data sẵn, chỉ cần tools cho WRITE (add/update/delete).
+    const { buildDataContext } = await import("../modules/context/data-injector.js");
+    const dataContext = await buildDataContext(input.tenantId, input.userMessage, summary);
+
     // ── Engine routing ────────────────────────────────────
     const GREETING = /^(chào|hi|hello|hey|xin chào|ok|ừ|uh|cảm ơn|thanks|bye|👋)[\s!.?]*$/i;
     const isGreeting = input.userMessage.trim().length < 20 && GREETING.test(input.userMessage.trim());
@@ -102,7 +109,9 @@ export async function processWithCommander(input: {
     const systemPrompt = buildCommanderPrompt(input.tenantName, input.userName, input.userRole, input.aiConfig, engine !== "fast-api")
       + (resourceContext ? `\n\nHỆ THỐNG CÓ:\n${resourceContext}` : "")
       + docsContext
-      + fileContext;
+      + fileContext
+      + dataContext
+      + (ctx.formContext ? ctx.formContext : "");
 
     // Propagate to ctx so logger can read them
     ctx.systemPrompt = systemPrompt;

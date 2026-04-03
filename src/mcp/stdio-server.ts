@@ -10,7 +10,11 @@ import { createMcpServer } from "./server.js";
 
 async function main() {
   loadConfig();
-  await runMigrations();
+  // Parent process (index.ts) chạy migrate trước khi spawn subprocess.
+  // SKIP_MIGRATIONS=1 được set bởi agent-runner.ts khi tạo MCP subprocess.
+  if (!process.env.SKIP_MIGRATIONS) {
+    await runMigrations();
+  }
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);

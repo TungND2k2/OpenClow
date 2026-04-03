@@ -151,5 +151,5 @@ export function formatSummaryForPrompt(summary: ResourceSummary): string {
 
   if (parts.length === 0) return "";
 
-  return `\n\nHỆ THỐNG HIỆN CÓ:\n${parts.join("\n")}\n→ Dùng tools để truy vấn chi tiết. Khi user nhắc đến resource có sẵn → gọi tool tương ứng, KHÔNG hỏi lại.`;
+  return `\n\nHỆ THỐNG HIỆN CÓ:\n${parts.join("\n")}\n→ Data được tải sẵn vào context khi liên quan. Chỉ gọi list_rows/search_all khi cần data NGOÀI context đã có.`;
 }

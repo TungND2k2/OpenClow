@@ -12,7 +12,7 @@ import { eq, and } from "drizzle-orm";
 import { getConfig } from "../config.js";
 import { processWithCommander } from "./agent-bridge.js";
 import { MessageQueue, type QueueJob } from "./message-queue.js";
-import { getOrCreateSession, appendMessage } from "../modules/conversations/conversation.service.js";
+import { getOrCreateSession, appendMessage, buildOptimizedHistory } from "../modules/conversations/conversation.service.js";
 import { listFiles, downloadAndUpload } from "../modules/storage/s3.service.js";
 import { getTenant } from "../modules/tenants/tenant.service.js";
 import { getDb } from "../db/connection.js";
@@ -296,18 +296,12 @@ async function handleJob(job: QueueJob): Promise<void> {
     console.error(`[Compact] Error: ${e.message}`);
   }
 
-  // ── Build history from session ──
+  // ── Build history + form context from session ──
   const freshSession = await getOrCreateSession({
     tenantId: job.tenantId, channel: "telegram",
     channelUserId: job.userId, userName: job.userName, userRole: job.userRole,
   });
-  const state = (typeof freshSession.state === "string" ? JSON.parse(freshSession.state) : freshSession.state) as any;
-  const messages = state?.messages ?? [];
-  const summary = state?.summary ?? "";
-  const history = [
-    ...(summary ? [{ role: "system" as const, content: `[TÓM TẮT]\n${summary}` }] : []),
-    ...messages.map((m: any) => ({ role: m.role as string, content: m.content as string })),
-  ];
+  const { history, formContext } = buildOptimizedHistory(freshSession);
 
   // ── Send progress message immediately ──
   const tk = job.botToken;
@@ -351,6 +345,7 @@ async function handleJob(job: QueueJob): Promise<void> {
     onProgress,
     onPersonaMessage,
     sessionId: session.id,
+    formContext,
   });
 
   // ── Edit progress message → final response ──

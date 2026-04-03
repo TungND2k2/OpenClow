@@ -20,7 +20,7 @@ export function logContext(ctx: PipelineContext) {
   const cfg = ctx.aiConfig as any;
   L(`[Context] System prompt: ~${promptTokens} tokens`);
   L(`  ├── Bot: ${cfg.bot_name ?? "?"} (${cfg.bot_intro ?? "?"})`);
-  L(`  ├── Resources: ${ctx.fileContext ? "injected" : "none"}`);
+  L(`  ├── File ctx: ${ctx.fileContext ? "injected" : "none"}`);
   L(`  ├── Form state: ${ctx.formContext ? "ACTIVE" : "none"}`);
   if (ctx.formContext) L(`  │   ${ctx.formContext.substring(0, 100).replace(/\n/g, " ")}`);
 }
