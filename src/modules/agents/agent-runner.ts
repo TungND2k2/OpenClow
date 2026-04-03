@@ -129,23 +129,41 @@ export class AgentRunner {
         },
       },
     })) {
-      // Track tool calls from SDK messages
-      if (msg.type === "assistant" && (msg as any).message) {
+      // Log EVERY SDK message for debugging
+      const msgType = msg.type;
+      const msgSub = (msg as any).subtype ?? "";
+
+      if (msgType === "system" && msgSub === "init") {
+        const mcpServers = (msg as any).mcp_servers ?? [];
+        console.error(`${prefix} SDK init: MCP servers: ${JSON.stringify(mcpServers.map((s: any) => `${s.name}:${s.status}`))}`);
+      }
+
+      if (msgType === "assistant" && (msg as any).message) {
         for (const block of (msg as any).message.content ?? []) {
-          if (typeof block === "string") finalText += block;
-          else if (block.type === "text") finalText += block.text;
-          else if (block.type === "tool_use") {
-            // SDK called a tool natively via MCP
+          if (typeof block === "string") {
+            finalText += block;
+          } else if (block.type === "text") {
+            finalText += block.text;
+            console.error(`${prefix} SDK text: ${block.text.substring(0, 100)}`);
+          } else if (block.type === "tool_use") {
+            console.error(`${prefix} SDK tool_use: ${block.name}(${JSON.stringify(block.input).substring(0, 150)})`);
             allToolResults.push({
               tool: block.name,
               args: block.input as Record<string, unknown>,
               result: "executed via MCP",
             });
+          } else if (block.type === "tool_result") {
+            const content = (block as any).content;
+            console.error(`${prefix} SDK tool_result: ${typeof content === "string" ? content.substring(0, 200) : JSON.stringify(content).substring(0, 200)}`);
           }
         }
       }
-      if (msg.type === "result" && "result" in msg) {
-        finalText = (msg as any).result ?? finalText;
+
+      if (msgType === "result") {
+        const r = (msg as any).result ?? "";
+        const sub = (msg as any).subtype ?? "";
+        console.error(`${prefix} SDK result (${sub}): ${typeof r === "string" ? r.substring(0, 150) : ""}`);
+        if ("result" in msg) finalText = (msg as any).result ?? finalText;
       }
     }
 
