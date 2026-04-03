@@ -21,12 +21,13 @@ export function createMcpServer(): McpServer {
     server.tool(
       name,
       `OpenClaw tool: ${name}`,
-      { args: z.record(z.any()).optional() },
+      { input: z.record(z.any()).optional().describe("Tool arguments as key-value pairs") },
       async (params: Record<string, unknown>) => {
         const { executeTool } = await import("../bot/tool-registry.js");
         const { getConfig } = await import("../config.js");
         const tenantId = getConfig().TELEGRAM_DEFAULT_TENANT_ID ?? "";
-        const args = (params.args as Record<string, unknown>) ?? params;
+        // Unwrap: SDK may send {input: {key: val}} or {key: val} directly
+        const args = (params.input as Record<string, unknown>) ?? params;
 
         console.error(`[MCP] Tool: ${name} | Args: ${JSON.stringify(args).substring(0, 200)}`);
         try {
